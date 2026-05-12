@@ -625,7 +625,7 @@ make CUDA_ARCH=        # old nvcc default target behavior
 Experimental CUDA low-startup-cache mode:
 
 ```sh
-./start-lazy-experts.sh --ds4-only
+./start-lazy-experts.sh
 ```
 
 This sets `DS4_CUDA_LAZY_ROUTED_EXPERTS=1`, which skips routed MoE expert

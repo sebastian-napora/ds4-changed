@@ -1419,6 +1419,8 @@ static bool accelerator_cache_model_tensor_spans(const ds4_model *m, uint64_t *c
 
     const uint64_t max_span = accelerator_cuda_preload_span_bytes();
     uint64_t cached = 0;
+    uint64_t deferred = 0;
+    uint64_t deferred_spans = 0;
     uint64_t merged = 0;
     for (uint64_t i = 0; i < nspan;) {
         uint64_t off = spans[i].off;
@@ -1434,6 +1436,13 @@ static bool accelerator_cache_model_tensor_spans(const ds4_model *m, uint64_t *c
             char label[96];
             snprintf(label, sizeof(label), "tensor-span:%" PRIu64, merged);
             if (ds4_gpu_cache_model_range(m->map, m->size, off, chunk_end - off, label) == 0) {
+                if (lazy_routed_experts) {
+                    deferred += chunk_end - off;
+                    deferred_spans++;
+                    merged++;
+                    off = chunk_end;
+                    continue;
+                }
                 fprintf(stderr,
                         "ds4: accelerator failed to cache model tensor span %" PRIu64
                         " at offset %" PRIu64 "\n",
@@ -1454,6 +1463,13 @@ static bool accelerator_cache_model_tensor_spans(const ds4_model *m, uint64_t *c
                 " tensors (%.2f GiB); routed experts will be reached on demand\n",
                 skipped_expert_tensors,
                 (double)skipped_expert_bytes / 1073741824.0);
+        if (deferred_spans != 0) {
+            fprintf(stderr,
+                    "ds4: CUDA lazy startup cache deferred %" PRIu64
+                    " non-expert spans (%.2f GiB) after cache budget/allocator fallback\n",
+                    deferred_spans,
+                    (double)deferred / 1073741824.0);
+        }
     }
     return true;
 }

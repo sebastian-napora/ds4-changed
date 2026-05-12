@@ -26,4 +26,8 @@ echo "  DS4_CUDA_WEIGHT_CACHE_VERBOSE=$DS4_CUDA_WEIGHT_CACHE_VERBOSE"
 echo "=========================================="
 echo ""
 
+if [ "$#" -eq 0 ]; then
+    set -- --ds4-only
+fi
+
 exec ./start-server.sh "$@"
