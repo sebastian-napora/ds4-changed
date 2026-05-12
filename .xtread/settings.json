@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(github.com)",
+      "Bash(nvidia-smi *)",
+      "Bash(nvcc *)",
+      "Bash(free *)",
+      "Bash(ls *)",
+      "Bash(./download_model.sh *)",
+      "Bash(nohup *)",
+      "Bash(make)",
+      "Bash(tail *)",
+      "Bash(cat *)",
+      "Bash(curl *)",
+      "Bash(stat *)",
+      "Bash(python3 *)",
+      "Bash(xargs *)",
+      "Bash(./ds4 *)",
+      "Bash(./ds4-server *)",
+      "Bash(find *)",
+      "Read(//home/sna/ai-projects/lunch-model/**)",
+      "Bash(chmod *)"
+    ]
+  },
+  "$version": 3
+}
