@@ -6590,6 +6590,16 @@ static void log_decode_progress(req_kind kind, const char *ctx, int completion,
     *last_completion = completion;
 }
 
+static bool server_request_progress_verbose(void) {
+    const char *env = getenv("DS4_SERVER_REQUEST_PROGRESS");
+    return env && env[0] && strcmp(env, "0") != 0;
+}
+
+static bool server_should_log_eval_start(int completion) {
+    if (!server_request_progress_verbose()) return false;
+    return completion < 8 || ((completion + 1) % 10) == 0;
+}
+
 typedef struct {
     bool inside;
     char tail[8]; /* Long enough for "</think>". */
@@ -7102,6 +7112,14 @@ static void generate_job(server *s, job *j) {
     const double decode_t0 = now_sec();
     double last_decode_log_t = decode_t0;
     int last_decode_log_completion = 0;
+    if (server_request_progress_verbose()) {
+        server_log(DS4_LOG_GENERATION,
+                   "ds4-server: %s ctx=%s decode start max=%d room=%d",
+                   j->req.kind == REQ_CHAT ? "chat" : "completion",
+                   ctx_span,
+                   max_tokens,
+                   room);
+    }
     thinking_state thinking = thinking_state_from_prompt(&j->req);
     dsml_decode_tracker dsml_tracker;
     dsml_decode_tracker_init(&dsml_tracker);
@@ -7126,6 +7144,16 @@ static void generate_job(server *s, job *j) {
         }
         if (in_tool_call && !dsml_decode_state_uses_payload_sampling(dsml_state)) {
             temperature = 0.0f;
+        }
+        const bool log_eval_start = server_should_log_eval_start(completion);
+        double eval_t0 = 0.0;
+        if (log_eval_start) {
+            eval_t0 = now_sec();
+            server_log(DS4_LOG_GENERATION,
+                       "ds4-server: %s ctx=%s gen=%d eval start",
+                       j->req.kind == REQ_CHAT ? "chat" : "completion",
+                       ctx_span,
+                       completion + 1);
         }
         int token = ds4_session_sample(s->session, temperature, top_k, top_p, min_p, &rng);
         if (token == ds4_token_eos(s->engine)) {
@@ -7158,6 +7186,15 @@ static void generate_job(server *s, job *j) {
             }
             toks[0] = token;
             ntok = 1;
+        }
+        if (log_eval_start) {
+            server_log(DS4_LOG_GENERATION,
+                       "ds4-server: %s ctx=%s gen=%d eval done tokens=%d %.3fs",
+                       j->req.kind == REQ_CHAT ? "chat" : "completion",
+                       ctx_span,
+                       completion + ntok,
+                       ntok,
+                       now_sec() - eval_t0);
         }
 
         bool stop_decode = false;

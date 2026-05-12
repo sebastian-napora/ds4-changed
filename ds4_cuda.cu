@@ -367,7 +367,10 @@ static void cuda_q8_f16_cache_budget_notice(
         uint64_t total_bytes,
         uint64_t reserve_bytes,
         uint64_t limit_bytes) {
-    if (g_q8_f16_budget_notice_printed && getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE") == NULL) return;
+    if (g_q8_f16_budget_notice_printed &&
+        getenv("DS4_CUDA_Q8_F16_CACHE_REPEAT") == NULL) {
+        return;
+    }
     g_q8_f16_budget_notice_printed = 1;
     if (limit_bytes != UINT64_MAX && free_bytes == 0 && total_bytes == 0 && reserve_bytes == 0) {
         fprintf(stderr,
@@ -982,6 +985,55 @@ static char *cuda_model_arena_alloc(uint64_t bytes, const char *what) {
     return (char *)dev;
 }
 
+static int cuda_should_log_direct_cache_fallback(const char *what) {
+    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE") == NULL) return 0;
+    if (getenv("DS4_CUDA_DIRECT_CACHE_REPEAT") != NULL) return 1;
+
+    static int logged_moe_gate;
+    static int logged_moe_up;
+    static int logged_moe_down;
+    static int logged_tensor_span;
+    static int logged_other;
+    int *flag = &logged_other;
+    if (what && strcmp(what, "moe_gate") == 0) flag = &logged_moe_gate;
+    else if (what && strcmp(what, "moe_up") == 0) flag = &logged_moe_up;
+    else if (what && strcmp(what, "moe_down") == 0) flag = &logged_moe_down;
+    else if (what && strncmp(what, "tensor-span:", 12) == 0) flag = &logged_tensor_span;
+    if (*flag) return 0;
+    *flag = 1;
+    return 1;
+}
+
+static void cuda_moe_log_expert_stats(const ds4_gpu_tensor *selected, uint32_t n_tokens, uint32_t n_expert) {
+    if (getenv("DS4_CUDA_MOE_EXPERT_STATS") == NULL || !selected || n_tokens == 0 || n_expert == 0) return;
+    const uint64_t pair_count = (uint64_t)n_tokens * n_expert;
+    if (pair_count > 1u << 24) return;
+    std::vector<int32_t> ids((size_t)pair_count);
+    cudaError_t err = cudaMemcpy(ids.data(), selected->ptr,
+                                 (size_t)(pair_count * sizeof(int32_t)),
+                                 cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: CUDA MoE expert stats read failed: %s\n", cudaGetErrorString(err));
+        (void)cudaGetLastError();
+        return;
+    }
+    uint32_t counts[256] = {0};
+    uint32_t unique = 0;
+    for (uint64_t i = 0; i < pair_count; i++) {
+        int32_t id = ids[(size_t)i];
+        if (id < 0 || id >= 256) continue;
+        if (counts[id]++ == 0) unique++;
+    }
+    static uint64_t call_id;
+    fprintf(stderr,
+            "ds4: CUDA MoE expert stats call=%llu tokens=%u topk=%u unique=%u/256 pairs=%llu\n",
+            (unsigned long long)++call_id,
+            n_tokens,
+            n_expert,
+            unique,
+            (unsigned long long)pair_count);
+}
+
 static const char *cuda_model_range_ptr_from_fd(
         const void *model_map,
         uint64_t offset,
@@ -990,7 +1042,7 @@ static const char *cuda_model_range_ptr_from_fd(
     if (g_model_fd < 0 || bytes == 0) return NULL;
     const uint64_t limit = cuda_model_cache_limit_bytes();
     if (g_model_range_bytes > limit || bytes > limit - g_model_range_bytes) {
-        if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+        if (cuda_should_log_direct_cache_fallback(what)) {
             fprintf(stderr, "ds4: CUDA direct %s %.2f MiB (cache budget %.2f GiB exhausted)\n",
                     what ? what : "weights",
                     (double)bytes / 1048576.0,
@@ -9169,6 +9221,7 @@ static int routed_moe_launch(
         down_bytes > model_size - down_offset) {
         return 0;
     }
+    cuda_moe_log_expert_stats(selected, n_tokens, n_expert);
     const char *gate_w = cuda_model_range_ptr(model_map, gate_offset, gate_bytes, "moe_gate");
     const char *up_w = cuda_model_range_ptr(model_map, up_offset, gate_bytes, "moe_up");
     const char *down_w = cuda_model_range_ptr(model_map, down_offset, down_bytes, "moe_down");
