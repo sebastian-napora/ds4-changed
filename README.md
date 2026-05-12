@@ -622,6 +622,18 @@ make CUDA_ARCH=sm_120
 make CUDA_ARCH=        # old nvcc default target behavior
 ```
 
+Experimental CUDA low-startup-cache mode:
+
+```sh
+./start-lazy-experts.sh --ds4-only
+```
+
+This sets `DS4_CUDA_LAZY_ROUTED_EXPERTS=1`, which skips routed MoE expert
+tensors during the startup device-cache pass while still caching dense, router,
+attention, and shared-expert tensors. The current CUDA MoE kernels still request
+whole per-layer routed expert tensors when a layer runs, so this is a startup
+and residency experiment, not yet true selected-expert paging.
+
 There is also a CPU reference/debug path:
 
 ```sh

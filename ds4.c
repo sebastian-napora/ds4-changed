@@ -1372,12 +1372,40 @@ static uint64_t accelerator_cuda_preload_span_bytes(void) {
     return mb * 1048576ull;
 }
 
+static bool accelerator_cuda_lazy_routed_experts(void) {
+    return getenv("DS4_CUDA_LAZY_ROUTED_EXPERTS") != NULL;
+}
+
+static bool accelerator_name_contains(const ds4_str name, const char *needle) {
+    const size_t needle_len = strlen(needle);
+    if (!name.ptr || needle_len == 0 || name.len < needle_len) return false;
+    for (size_t i = 0; i <= name.len - needle_len; i++) {
+        if (memcmp(name.ptr + i, needle, needle_len) == 0) return true;
+    }
+    return false;
+}
+
+static bool accelerator_tensor_is_routed_expert(const ds4_tensor *t) {
+    if (!t || !t->name.ptr) return false;
+    return accelerator_name_contains(t->name, "ffn_gate_exps.weight") ||
+           accelerator_name_contains(t->name, "ffn_up_exps.weight") ||
+           accelerator_name_contains(t->name, "ffn_down_exps.weight");
+}
+
 static bool accelerator_cache_model_tensor_spans(const ds4_model *m, uint64_t *cached_out) {
     accelerator_tensor_span *spans = xmalloc((size_t)m->n_tensors * sizeof(spans[0]));
     uint64_t nspan = 0;
+    uint64_t skipped_expert_tensors = 0;
+    uint64_t skipped_expert_bytes = 0;
+    const bool lazy_routed_experts = accelerator_cuda_lazy_routed_experts();
     for (uint64_t i = 0; i < m->n_tensors; i++) {
         const ds4_tensor *t = &m->tensors[i];
         if (t->bytes == 0) continue;
+        if (lazy_routed_experts && accelerator_tensor_is_routed_expert(t)) {
+            skipped_expert_tensors++;
+            skipped_expert_bytes += t->bytes;
+            continue;
+        }
         if (t->abs_offset > m->size || t->bytes > m->size - t->abs_offset) {
             free(spans);
             return false;
@@ -1420,6 +1448,13 @@ static bool accelerator_cache_model_tensor_spans(const ds4_model *m, uint64_t *c
     }
     free(spans);
     if (cached_out) *cached_out = cached;
+    if (lazy_routed_experts) {
+        fprintf(stderr,
+                "ds4: CUDA lazy routed experts skipped startup cache for %" PRIu64
+                " tensors (%.2f GiB); routed experts will be reached on demand\n",
+                skipped_expert_tensors,
+                (double)skipped_expert_bytes / 1073741824.0);
+    }
     return true;
 }
 
