@@ -634,6 +634,19 @@ attention, and shared-expert tensors. The current CUDA MoE kernels still request
 whole per-layer routed expert tensors when a layer runs, so this is a startup
 and residency experiment, not yet true selected-expert paging.
 
+Router/expert tracing is available for profiling MoE behavior:
+
+```sh
+DS4_ROUTER_TRACE=summary ./start-lazy-experts.sh
+DS4_ROUTER_TRACE=1 DS4_ROUTER_TRACE_LAYER=20 DS4_ROUTER_TRACE_LIMIT=4 ./start-lazy-experts.sh
+```
+
+`DS4_ROUTER_TRACE=summary` logs the active expert count and most-used expert IDs
+per layer/chunk. `DS4_ROUTER_TRACE=1` also logs sampled token rows with the six
+selected expert IDs, router weights, logits, probabilities, and whether routing
+used normal top-k scoring or the token-id expert table. The trace synchronizes
+GPU work to read tensors back, so enable it only for diagnostics.
+
 There is also a CPU reference/debug path:
 
 ```sh

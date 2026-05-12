@@ -8521,6 +8521,218 @@ static bool metal_graph_debug_wants(const char *name, uint32_t il, uint32_t pos)
     return true;
 }
 
+static bool ds4_env_enabled_value(const char *env) {
+    return env && env[0] &&
+           strcmp(env, "0") != 0 &&
+           strcmp(env, "false") != 0 &&
+           strcmp(env, "FALSE") != 0 &&
+           strcmp(env, "off") != 0 &&
+           strcmp(env, "OFF") != 0;
+}
+
+static bool router_trace_enabled(void) {
+    return ds4_env_enabled_value(getenv("DS4_ROUTER_TRACE"));
+}
+
+static bool router_trace_summary_only(void) {
+    const char *env = getenv("DS4_ROUTER_TRACE");
+    return env && (strcmp(env, "summary") == 0 || strcmp(env, "stats") == 0);
+}
+
+static uint32_t router_trace_limit(uint32_t n_tokens) {
+    const char *env = getenv("DS4_ROUTER_TRACE_LIMIT");
+    uint32_t limit = n_tokens == 1 ? 1u : 2u;
+    if (env && env[0]) {
+        unsigned long v = strtoul(env, NULL, 10);
+        if (v > 0 && v < 1024ul) limit = (uint32_t)v;
+    }
+    return limit < n_tokens ? limit : n_tokens;
+}
+
+static bool router_trace_layer_wants(uint32_t il) {
+    const char *env = getenv("DS4_ROUTER_TRACE_LAYER");
+    if (!env || !env[0] || strcmp(env, "all") == 0) return true;
+    return (uint32_t)strtoul(env, NULL, 10) == il;
+}
+
+static bool router_trace_pos_wants(uint32_t pos) {
+    const char *env = getenv("DS4_ROUTER_TRACE_POS");
+    if (!env || !env[0] || strcmp(env, "all") == 0) return true;
+    return (uint32_t)strtoul(env, NULL, 10) == pos;
+}
+
+static const float *router_trace_bias_ptr(
+        const ds4_model         *model,
+        const ds4_layer_weights *layer,
+        bool                     has_bias) {
+    if (!model || !layer || !has_bias || !layer->ffn_exp_probs_b) return NULL;
+    const ds4_tensor *t = layer->ffn_exp_probs_b;
+    if (t->type != DS4_TENSOR_F32 ||
+        t->abs_offset > model->size ||
+        model->size - t->abs_offset < DS4_N_EXPERT * sizeof(float)) {
+        return NULL;
+    }
+    return (const float *)(model->map + t->abs_offset);
+}
+
+static void router_trace_print_top_counts(uint32_t counts[DS4_N_EXPERT]) {
+    bool first = true;
+    fputs(" top=[", stderr);
+    for (uint32_t out = 0; out < 12u; out++) {
+        uint32_t best_e = 0;
+        uint32_t best_c = 0;
+        for (uint32_t e = 0; e < DS4_N_EXPERT; e++) {
+            if (counts[e] > best_c) {
+                best_c = counts[e];
+                best_e = e;
+            }
+        }
+        if (best_c == 0) break;
+        if (!first) fputc(',', stderr);
+        fprintf(stderr, "%u:%u", best_e, best_c);
+        first = false;
+        counts[best_e] = 0;
+    }
+    fputc(']', stderr);
+}
+
+static void router_trace_log(
+        const char              *phase,
+        const ds4_model         *model,
+        const ds4_layer_weights *layer,
+        ds4_gpu_tensor          *selected,
+        ds4_gpu_tensor          *weights,
+        ds4_gpu_tensor          *probs,
+        ds4_gpu_tensor          *logits,
+        ds4_gpu_tensor          *tokens,
+        uint32_t                 il,
+        uint32_t                 pos0,
+        uint32_t                 n_tokens,
+        bool                     has_bias,
+        bool                     hash_mode) {
+    if (!router_trace_enabled() || !router_trace_layer_wants(il) ||
+        !selected || !weights || !probs || !logits || n_tokens == 0) {
+        return;
+    }
+
+    if (ds4_gpu_synchronize() == 0) {
+        fprintf(stderr, "ds4: failed to synchronize before router trace layer %u pos %u\n", il, pos0);
+        return;
+    }
+
+    const uint64_t selected_count = (uint64_t)n_tokens * DS4_N_EXPERT_USED;
+    int32_t *sel_all = xmalloc((size_t)selected_count * sizeof(sel_all[0]));
+    if (ds4_gpu_tensor_read(selected, 0, sel_all, selected_count * sizeof(sel_all[0])) == 0) {
+        fprintf(stderr, "ds4: failed to read router selected tensor for trace layer %u pos %u\n", il, pos0);
+        free(sel_all);
+        if (ds4_gpu_begin_commands() == 0) {
+            fprintf(stderr, "ds4: failed to resume GPU commands after router trace layer %u pos %u\n", il, pos0);
+        }
+        return;
+    }
+
+    uint32_t counts[DS4_N_EXPERT] = {0};
+    uint32_t unique = 0;
+    uint32_t invalid = 0;
+    for (uint64_t i = 0; i < selected_count; i++) {
+        int32_t e = sel_all[i];
+        if (e < 0 || e >= DS4_N_EXPERT) {
+            invalid++;
+            continue;
+        }
+        if (counts[(uint32_t)e]++ == 0) unique++;
+    }
+    uint32_t counts_copy[DS4_N_EXPERT];
+    memcpy(counts_copy, counts, sizeof(counts_copy));
+    fprintf(stderr,
+            "ds4: router trace %s layer=%u pos=%u..%u tokens=%u mode=%s%s active=%u/%u pairs=%" PRIu64,
+            phase ? phase : "graph",
+            il,
+            pos0,
+            pos0 + n_tokens - 1u,
+            n_tokens,
+            hash_mode ? "token-hash" : "topk",
+            (!hash_mode && has_bias) ? "+bias" : "",
+            unique,
+            DS4_N_EXPERT,
+            selected_count);
+    if (invalid) fprintf(stderr, " invalid=%u", invalid);
+    router_trace_print_top_counts(counts_copy);
+    fputc('\n', stderr);
+
+    if (!router_trace_summary_only()) {
+        const float *bias = router_trace_bias_ptr(model, layer, has_bias && !hash_mode);
+        const uint32_t limit = router_trace_limit(n_tokens);
+        float prob_row[DS4_N_EXPERT];
+        float logit_row[DS4_N_EXPERT];
+        float weight_row[DS4_N_EXPERT_USED];
+        int32_t token_id = -1;
+
+        for (uint32_t t = 0; t < limit; t++) {
+            const uint32_t pos = pos0 + t;
+            if (!router_trace_pos_wants(pos)) continue;
+            token_id = -1;
+            if (ds4_gpu_tensor_read(probs, (uint64_t)t * DS4_N_EXPERT * sizeof(float),
+                                    prob_row, sizeof(prob_row)) == 0 ||
+                ds4_gpu_tensor_read(logits, (uint64_t)t * DS4_N_EXPERT * sizeof(float),
+                                    logit_row, sizeof(logit_row)) == 0 ||
+                ds4_gpu_tensor_read(weights, (uint64_t)t * DS4_N_EXPERT_USED * sizeof(float),
+                                    weight_row, sizeof(weight_row)) == 0) {
+                fprintf(stderr, "ds4: failed to read router row for trace layer %u pos %u\n", il, pos);
+                continue;
+            }
+            if (tokens) {
+                (void)ds4_gpu_tensor_read(tokens, (uint64_t)t * sizeof(token_id),
+                                          &token_id, sizeof(token_id));
+            }
+            fprintf(stderr,
+                    "ds4: router row %s layer=%u pos=%u token=%d why=%s experts=[",
+                    phase ? phase : "graph",
+                    il,
+                    pos,
+                    token_id,
+                    hash_mode ? "token-id expert table; weights from router probs"
+                              : (bias ? "top-6 by sqrt(softplus(logit))+bias"
+                                      : "top-6 by sqrt(softplus(logit))"));
+            for (uint32_t k = 0; k < DS4_N_EXPERT_USED; k++) {
+                if (k) fputc(',', stderr);
+                fprintf(stderr, "%d", sel_all[(uint64_t)t * DS4_N_EXPERT_USED + k]);
+            }
+            fputs("] weights=[", stderr);
+            for (uint32_t k = 0; k < DS4_N_EXPERT_USED; k++) {
+                if (k) fputc(',', stderr);
+                fprintf(stderr, "%.5g", weight_row[k]);
+            }
+            fputs("] scores=[", stderr);
+            for (uint32_t k = 0; k < DS4_N_EXPERT_USED; k++) {
+                if (k) fputc(',', stderr);
+                int32_t e = sel_all[(uint64_t)t * DS4_N_EXPERT_USED + k];
+                float score = (e >= 0 && e < DS4_N_EXPERT) ? prob_row[e] + (bias ? bias[e] : 0.0f) : 0.0f;
+                fprintf(stderr, "%.5g", score);
+            }
+            fputs("] probs=[", stderr);
+            for (uint32_t k = 0; k < DS4_N_EXPERT_USED; k++) {
+                if (k) fputc(',', stderr);
+                int32_t e = sel_all[(uint64_t)t * DS4_N_EXPERT_USED + k];
+                fprintf(stderr, "%.5g", (e >= 0 && e < DS4_N_EXPERT) ? prob_row[e] : 0.0f);
+            }
+            fputs("] logits=[", stderr);
+            for (uint32_t k = 0; k < DS4_N_EXPERT_USED; k++) {
+                if (k) fputc(',', stderr);
+                int32_t e = sel_all[(uint64_t)t * DS4_N_EXPERT_USED + k];
+                fprintf(stderr, "%.5g", (e >= 0 && e < DS4_N_EXPERT) ? logit_row[e] : 0.0f);
+            }
+            fputs("]\n", stderr);
+        }
+    }
+
+    free(sel_all);
+
+    if (ds4_gpu_begin_commands() == 0) {
+        fprintf(stderr, "ds4: failed to resume GPU commands after router trace layer %u pos %u\n", il, pos0);
+    }
+}
+
 static void metal_graph_debug_dump_tensor(
         const char       *name,
         ds4_gpu_tensor *t,
@@ -9720,6 +9932,21 @@ static bool metal_graph_encode_decode_layer(
                                                 layer->ffn_exp_probs_b != NULL,
                                                 layer->ffn_gate_tid2eid != NULL,
                                                 g->router_logits) != 0;
+    if (ok) {
+        router_trace_log("decode",
+                         model,
+                         layer,
+                         g->router_selected,
+                         g->router_weights,
+                         g->router_probs,
+                         g->router_logits,
+                         NULL,
+                         il,
+                         pos,
+                         1,
+                         layer->ffn_exp_probs_b != NULL,
+                         layer->ffn_gate_tid2eid != NULL);
+    }
     DS4_METAL_PROFILE_DECODE_STAGE("router");
     if (ok) {
         metal_graph_debug_dump_tensor("ffn_moe_logits", g->router_logits, DS4_N_EXPERT, il, pos);
@@ -12463,6 +12690,21 @@ static bool metal_graph_encode_layer_ffn_batch(
                                                       g->batch_router_logits,
                                                       g->prefill_tokens,
                                                       n_tokens) != 0;
+    if (ok) {
+        router_trace_log("prefill",
+                         model,
+                         layer,
+                         g->batch_router_selected,
+                         g->batch_router_weights,
+                         g->batch_router_probs,
+                         g->batch_router_logits,
+                         g->prefill_tokens,
+                         il,
+                         pos0,
+                         n_tokens,
+                         layer->ffn_exp_probs_b != NULL,
+                         layer->ffn_gate_tid2eid != NULL);
+    }
     if (ok) {
         metal_graph_debug_dump_tensor("ffn_moe_logits", g->batch_router_logits,
                                       (uint64_t)n_tokens * DS4_N_EXPERT, il, pos0);
