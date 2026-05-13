@@ -690,6 +690,21 @@ To run only the tests with separated logs:
 ./run-tests-logged.sh --test --server --test --logprob-vectors
 ```
 
+For a complete repository-work session that covers assessment, improvement
+notes, validation, verification, setup/create/edit/read/check/tool command logs,
+git history, optional MCP inspection, optional per-test logs, and optional model
+startup with router expert tracing:
+
+```sh
+./repo-agent-work.sh --with-tests --with-mcp
+./repo-agent-work.sh --start-model --with-tests --expert-summary
+./repo-agent-work.sh --setup-cmd "./setup-mtp.sh --setup-only" --verify-cmd "git status --short"
+```
+
+When `--start-model` is used, expert usage is saved through `DS4_ROUTER_TRACE`.
+Summary expert routing goes to `summary-logs/<session>/model/run.log`; detailed
+sampled expert rows can be enabled with `--expert-detail`.
+
 There is also a CPU reference/debug path:
 
 ```sh
