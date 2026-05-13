@@ -701,10 +701,23 @@ git history, optional MCP inspection, optional per-test logs, and optional model
 startup with router expert tracing:
 
 ```sh
+./run-everything.sh
 ./repo-agent-work.sh --with-tests --with-mcp
 ./repo-agent-work.sh --start-model --with-tests --expert-summary
 ./repo-agent-work.sh --start-model --expert-detail --smoke-prompt "Say hello in one sentence."
 ./repo-agent-work.sh --setup-cmd "./setup-mtp.sh --setup-only" --verify-cmd "git status --short"
+```
+
+`run-everything.sh` is the one-command workflow. It creates one parent session
+under `summary-logs/`, records repository/MCP/tool state, runs tests one by one,
+starts the low-GPU model with expert tracing, asks the model to inspect the
+repository and test logs case by case, saves the real model responses, then
+writes a final summary:
+
+```sh
+./run-everything.sh
+./run-everything.sh --expert-detail --max-tokens 2048
+./run-everything.sh --no-start-model --prompt "Review only the current repository logs."
 ```
 
 When `--start-model` is used, expert usage is saved through `DS4_ROUTER_TRACE`.
