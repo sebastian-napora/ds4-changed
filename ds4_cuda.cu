@@ -160,6 +160,12 @@ static const char *cuda_model_range_ptr_from_fd(
         uint64_t offset,
         uint64_t bytes,
         const char *what);
+
+static int cuda_weight_cache_verbose_enabled(void) {
+    const char *env = getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE");
+    return env && env[0] && strcmp(env, "0") != 0;
+}
+
 __global__ static void dequant_q8_0_to_f16_kernel(
         __half *out,
         const unsigned char *w,
@@ -256,7 +262,7 @@ static const char *cuda_model_range_ptr(const void *model_map, uint64_t offset, 
                 char *dev_ptr = (char *)reg_dev + reg_delta;
                 g_model_ranges.push_back({model_map, offset, bytes, dev_ptr, (void *)reg_addr, (char *)reg_dev, reg_bytes, 1, 0});
                 g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
-                if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+                if (cuda_weight_cache_verbose_enabled()) {
                     fprintf(stderr, "ds4: CUDA mapped %s %.2f MiB\n",
                             what ? what : "weights",
                             (double)bytes / 1048576.0);
@@ -301,7 +307,7 @@ static const char *cuda_model_range_ptr(const void *model_map, uint64_t offset, 
     g_model_ranges.push_back({model_map, offset, bytes, (char *)dev, NULL, NULL, 0, 0, 0});
     g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
     g_model_range_bytes += bytes;
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+    if (cuda_weight_cache_verbose_enabled()) {
         fprintf(stderr, "ds4: CUDA cached %s %.2f MiB (total %.2f GiB)\n",
                 what ? what : "weights",
                 (double)bytes / 1048576.0,
@@ -577,7 +583,7 @@ static const __half *cuda_q8_f16_ptr(
     g_q8_f16_ranges.push_back({model_map, offset, weight_bytes, in_dim, out_dim, dev});
     g_q8_f16_by_offset[offset] = g_q8_f16_ranges.size() - 1u;
     g_q8_f16_bytes += out_bytes;
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+    if (cuda_weight_cache_verbose_enabled()) {
         fprintf(stderr, "ds4: CUDA cached q8 fp16 %.2f MiB (total %.2f GiB)\n",
                 (double)out_bytes / 1048576.0,
                 (double)g_q8_f16_bytes / 1073741824.0);
@@ -628,7 +634,7 @@ static float *cuda_q8_f32_ptr(
     g_q8_f32_ranges.push_back({model_map, offset, weight_bytes, in_dim, out_dim, dev});
     g_q8_f32_by_offset[offset] = g_q8_f32_ranges.size() - 1u;
     g_q8_f32_bytes += out_bytes;
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+    if (cuda_weight_cache_verbose_enabled()) {
         fprintf(stderr, "ds4: CUDA cached q8 fp32 %.2f MiB (total %.2f GiB)\n",
                 (double)out_bytes / 1048576.0,
                 (double)g_q8_f32_bytes / 1073741824.0);
@@ -649,7 +655,7 @@ static double cuda_wall_sec(void) {
 }
 
 static int cuda_model_load_progress_enabled(void) {
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE") != NULL) return 0;
+    if (cuda_weight_cache_verbose_enabled()) return 0;
     return 1;
 }
 
@@ -915,7 +921,7 @@ static int cuda_model_stage_read(void *stage, uint64_t stage_bytes,
             }
             const int direct_errno = errno;
             if (direct_errno == EINVAL || direct_errno == EFAULT || direct_errno == ENOTSUP || direct_errno == EOPNOTSUPP) {
-                if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+                if (cuda_weight_cache_verbose_enabled()) {
                     fprintf(stderr, "ds4: CUDA direct model read disabled: %s\n", strerror(direct_errno));
                 }
                 (void)close(g_model_direct_fd);
@@ -992,7 +998,7 @@ static char *cuda_model_arena_alloc(uint64_t bytes, const char *what) {
         return NULL;
     }
     g_model_arenas.push_back({(char *)dev, chunk, aligned});
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+    if (cuda_weight_cache_verbose_enabled()) {
         uint64_t arena_bytes = 0;
         for (const cuda_model_arena &a : g_model_arenas) arena_bytes += a.bytes;
         fprintf(stderr, "ds4: CUDA model arena allocated %.2f MiB (arenas %.2f GiB)\n",
@@ -1003,7 +1009,7 @@ static char *cuda_model_arena_alloc(uint64_t bytes, const char *what) {
 }
 
 static int cuda_should_log_direct_cache_fallback(const char *what) {
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE") == NULL) return 0;
+    if (!cuda_weight_cache_verbose_enabled()) return 0;
     if (getenv("DS4_CUDA_DIRECT_CACHE_REPEAT") != NULL) return 1;
 
     static int logged_moe_gate;
@@ -1065,7 +1071,7 @@ static uint64_t cuda_lazy_moe_max_resident_experts(void) {
         unsigned long long v = strtoull(env, &end, 10);
         if (end != env) n = (uint64_t)v;
     }
-    if (n > 4096u) n = 4096u;
+    if (n > 16384u) n = 16384u;
     return n;
 }
 
@@ -1126,7 +1132,7 @@ static void cuda_lazy_moe_evict_lru(void) {
     for (size_t i = 1; i < g_lazy_moe_experts.size(); i++) {
         if (g_lazy_moe_experts[i].last_use < g_lazy_moe_experts[victim].last_use) victim = i;
     }
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+    if (cuda_weight_cache_verbose_enabled()) {
         fprintf(stderr,
                 "ds4: CUDA lazy MoE evict layer offsets gate=%llu expert=%u\n",
                 (unsigned long long)g_lazy_moe_experts[victim].gate_offset,
@@ -1196,7 +1202,7 @@ static cuda_lazy_moe_expert *cuda_lazy_moe_load(
         return NULL;
     }
     g_lazy_moe_experts.push_back(e);
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+    if (cuda_weight_cache_verbose_enabled()) {
         fprintf(stderr,
                 "ds4: CUDA lazy MoE cached expert=%u %.2f MiB (resident %zu/%llu)\n",
                 expert,
@@ -1293,7 +1299,7 @@ static const char *cuda_model_range_ptr_from_fd(
     g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
     g_model_range_bytes += bytes;
     cuda_model_load_progress_note(g_model_range_bytes);
-    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+    if (cuda_weight_cache_verbose_enabled()) {
         fprintf(stderr, "ds4: CUDA fd-cached %s %.2f MiB (total %.2f GiB)\n",
                 what ? what : "weights",
                 (double)bytes / 1048576.0,
@@ -1673,11 +1679,11 @@ extern "C" int ds4_gpu_set_model_fd(int fd) {
             if (direct_fd >= 0) {
                 g_model_direct_fd = direct_fd;
                 if (g_model_direct_align < 512) g_model_direct_align = 512;
-                if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+                if (cuda_weight_cache_verbose_enabled()) {
                     fprintf(stderr, "ds4: CUDA model direct I/O enabled (align=%llu)\n",
                             (unsigned long long)g_model_direct_align);
                 }
-            } else if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+            } else if (cuda_weight_cache_verbose_enabled()) {
                 fprintf(stderr, "ds4: CUDA model direct I/O unavailable: %s\n", strerror(errno));
             }
         }

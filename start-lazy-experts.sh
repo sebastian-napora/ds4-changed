@@ -2,9 +2,9 @@
 #
 # Experimental CUDA startup mode for DeepSeek V4 Flash.
 # Keeps dense/router/shared tensors in the normal startup cache, but skips
-# routed MoE expert tensors at startup. During inference, only a small number
-# of selected routed experts are copied into the lazy expert cache; the rest
-# stay on the mapped model path instead of uploading the whole 256-expert tensor.
+# routed MoE expert tensors at startup. During inference, selected routed
+# expert slices are copied into a high-memory lazy cache; the rest stay on the
+# mapped model path instead of uploading the whole 256-expert tensor.
 #
 
 set -e
@@ -13,9 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 export DS4_CUDA_LAZY_ROUTED_EXPERTS="${DS4_CUDA_LAZY_ROUTED_EXPERTS:-1}"
-export DS4_CUDA_LAZY_MAX_RESIDENT_EXPERTS="${DS4_CUDA_LAZY_MAX_RESIDENT_EXPERTS:-40}"
+export DS4_CUDA_LAZY_MAX_RESIDENT_EXPERTS="${DS4_CUDA_LAZY_MAX_RESIDENT_EXPERTS:-8192}"
 export DS4_CUDA_WEIGHT_CACHE_LIMIT_GB="${DS4_CUDA_WEIGHT_CACHE_LIMIT_GB:-32}"
-export DS4_CUDA_WEIGHT_CACHE_VERBOSE="${DS4_CUDA_WEIGHT_CACHE_VERBOSE:-1}"
+export DS4_CUDA_WEIGHT_CACHE_VERBOSE="${DS4_CUDA_WEIGHT_CACHE_VERBOSE:-0}"
 export DS4_CUDA_Q8_F16_CACHE_MB="${DS4_CUDA_Q8_F16_CACHE_MB:-4096}"
 export DS4_SERVER_REQUEST_PROGRESS="${DS4_SERVER_REQUEST_PROGRESS:-1}"
 
