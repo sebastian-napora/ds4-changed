@@ -8596,6 +8596,31 @@ static void router_trace_print_top_counts(uint32_t counts[DS4_N_EXPERT]) {
     fputc(']', stderr);
 }
 
+static void router_trace_f32_stats(
+        const float *x,
+        uint32_t     n,
+        uint32_t    *finite_out,
+        float       *min_out,
+        float       *max_out) {
+    uint32_t finite = 0;
+    float minv = DS4_POS_INF;
+    float maxv = DS4_NEG_INF;
+    for (uint32_t i = 0; i < n; i++) {
+        const float v = x[i];
+        if (!isfinite(v)) continue;
+        if (v < minv) minv = v;
+        if (v > maxv) maxv = v;
+        finite++;
+    }
+    if (finite == 0) {
+        minv = 0.0f;
+        maxv = 0.0f;
+    }
+    if (finite_out) *finite_out = finite;
+    if (min_out) *min_out = minv;
+    if (max_out) *max_out = maxv;
+}
+
 static void router_trace_log(
         const char              *phase,
         const ds4_model         *model,
@@ -8634,18 +8659,39 @@ static void router_trace_log(
     uint32_t counts[DS4_N_EXPERT] = {0};
     uint32_t unique = 0;
     uint32_t invalid = 0;
+    uint32_t invalid_rows = 0;
+    uint32_t first_invalid_pos = UINT32_MAX;
+    int32_t first_invalid_id = 0;
     for (uint64_t i = 0; i < selected_count; i++) {
         int32_t e = sel_all[i];
         if (e < 0 || e >= DS4_N_EXPERT) {
             invalid++;
+            const uint32_t row = (uint32_t)(i / DS4_N_EXPERT_USED);
+            if (first_invalid_pos == UINT32_MAX) {
+                first_invalid_pos = pos0 + row;
+                first_invalid_id = e;
+            }
             continue;
         }
         if (counts[(uint32_t)e]++ == 0) unique++;
     }
+    if (invalid) {
+        for (uint32_t t = 0; t < n_tokens; t++) {
+            bool row_invalid = false;
+            for (uint32_t k = 0; k < DS4_N_EXPERT_USED; k++) {
+                const int32_t e = sel_all[(uint64_t)t * DS4_N_EXPERT_USED + k];
+                if (e < 0 || e >= DS4_N_EXPERT) {
+                    row_invalid = true;
+                    break;
+                }
+            }
+            if (row_invalid) invalid_rows++;
+        }
+    }
     uint32_t counts_copy[DS4_N_EXPERT];
     memcpy(counts_copy, counts, sizeof(counts_copy));
     fprintf(stderr,
-            "ds4: router trace %s layer=%u pos=%u..%u tokens=%u mode=%s%s active=%u/%u pairs=%" PRIu64,
+            "ds4: router trace %s layer=%u pos=%u..%u tokens=%u mode=%s%s active=%u/%u valid=%" PRIu64 "/%" PRIu64,
             phase ? phase : "graph",
             il,
             pos0,
@@ -8655,8 +8701,16 @@ static void router_trace_log(
             (!hash_mode && has_bias) ? "+bias" : "",
             unique,
             DS4_N_EXPERT,
+            selected_count - invalid,
             selected_count);
-    if (invalid) fprintf(stderr, " invalid=%u", invalid);
+    if (invalid) {
+        fprintf(stderr,
+                " invalid=%u invalid_rows=%u first_invalid_pos=%u first_invalid_id=%d",
+                invalid,
+                invalid_rows,
+                first_invalid_pos,
+                first_invalid_id);
+    }
     router_trace_print_top_counts(counts_copy);
     fputc('\n', stderr);
 
@@ -8685,12 +8739,28 @@ static void router_trace_log(
                 (void)ds4_gpu_tensor_read(tokens, (uint64_t)t * sizeof(token_id),
                                           &token_id, sizeof(token_id));
             }
+            uint32_t finite_logits = 0;
+            uint32_t finite_probs = 0;
+            float min_logit = 0.0f;
+            float max_logit = 0.0f;
+            float min_prob = 0.0f;
+            float max_prob = 0.0f;
+            router_trace_f32_stats(logit_row, DS4_N_EXPERT, &finite_logits, &min_logit, &max_logit);
+            router_trace_f32_stats(prob_row, DS4_N_EXPERT, &finite_probs, &min_prob, &max_prob);
             fprintf(stderr,
-                    "ds4: router row %s layer=%u pos=%u token=%d why=%s experts=[",
+                    "ds4: router row %s layer=%u pos=%u token=%d finite_logits=%u/%u logit_range=[%.5g,%.5g] finite_probs=%u/%u prob_range=[%.5g,%.5g] why=%s experts=[",
                     phase ? phase : "graph",
                     il,
                     pos,
                     token_id,
+                    finite_logits,
+                    DS4_N_EXPERT,
+                    min_logit,
+                    max_logit,
+                    finite_probs,
+                    DS4_N_EXPERT,
+                    min_prob,
+                    max_prob,
                     hash_mode ? "token-id expert table; weights from router probs"
                               : (bias ? "top-6 by sqrt(softplus(logit))+bias"
                                       : "top-6 by sqrt(softplus(logit))"));

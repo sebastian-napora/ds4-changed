@@ -126,6 +126,7 @@ static uint64_t g_q8_f16_bytes;
 static uint64_t g_q8_f32_bytes;
 static int g_q8_f16_disabled_after_oom;
 static int g_q8_f16_budget_notice_printed;
+static uint64_t g_lazy_moe_use_clock;
 static uint64_t g_model_load_progress_next;
 static double g_model_load_progress_last;
 static int g_model_load_progress_started;
@@ -136,6 +137,22 @@ static void *g_model_stage_raw[4];
 static void *g_model_stage[4];
 static cudaEvent_t g_model_stage_event[4];
 static uint64_t g_model_stage_bytes;
+
+struct cuda_lazy_moe_expert {
+    const void *host_base;
+    uint64_t gate_offset;
+    uint64_t up_offset;
+    uint64_t down_offset;
+    uint64_t gate_expert_bytes;
+    uint64_t down_expert_bytes;
+    uint32_t expert;
+    char *gate_ptr;
+    char *up_ptr;
+    char *down_ptr;
+    uint64_t last_use;
+};
+
+static std::vector<cuda_lazy_moe_expert> g_lazy_moe_experts;
 
 static int cuda_ok(cudaError_t err, const char *what);
 static const char *cuda_model_range_ptr_from_fd(
@@ -1034,6 +1051,162 @@ static void cuda_moe_log_expert_stats(const ds4_gpu_tensor *selected, uint32_t n
             (unsigned long long)pair_count);
 }
 
+static int cuda_lazy_moe_enabled(void) {
+    const char *env = getenv("DS4_CUDA_LAZY_ROUTED_EXPERTS");
+    return env && env[0] && strcmp(env, "0") != 0;
+}
+
+static uint64_t cuda_lazy_moe_max_resident_experts(void) {
+    uint64_t n = 6;
+    const char *env = getenv("DS4_CUDA_LAZY_MAX_RESIDENT_EXPERTS");
+    if (!env || !env[0]) env = getenv("DS4_CUDA_LAZY_EXPERTS");
+    if (env && env[0]) {
+        char *end = NULL;
+        unsigned long long v = strtoull(env, &end, 10);
+        if (end != env) n = (uint64_t)v;
+    }
+    if (n > 4096u) n = 4096u;
+    return n;
+}
+
+static void cuda_lazy_moe_release_one(cuda_lazy_moe_expert &e) {
+    if (e.gate_ptr) (void)cudaFree(e.gate_ptr);
+    if (e.up_ptr) (void)cudaFree(e.up_ptr);
+    if (e.down_ptr) (void)cudaFree(e.down_ptr);
+    e.gate_ptr = NULL;
+    e.up_ptr = NULL;
+    e.down_ptr = NULL;
+}
+
+static void cuda_lazy_moe_release_all(void) {
+    for (cuda_lazy_moe_expert &e : g_lazy_moe_experts) cuda_lazy_moe_release_one(e);
+    g_lazy_moe_experts.clear();
+    g_lazy_moe_use_clock = 0;
+}
+
+static int cuda_lazy_moe_entry_matches(
+        const cuda_lazy_moe_expert &e,
+        const void *model_map,
+        uint64_t gate_offset,
+        uint64_t up_offset,
+        uint64_t down_offset,
+        uint64_t gate_expert_bytes,
+        uint64_t down_expert_bytes,
+        uint32_t expert) {
+    return e.host_base == model_map &&
+           e.gate_offset == gate_offset &&
+           e.up_offset == up_offset &&
+           e.down_offset == down_offset &&
+           e.gate_expert_bytes == gate_expert_bytes &&
+           e.down_expert_bytes == down_expert_bytes &&
+           e.expert == expert;
+}
+
+static cuda_lazy_moe_expert *cuda_lazy_moe_find(
+        const void *model_map,
+        uint64_t gate_offset,
+        uint64_t up_offset,
+        uint64_t down_offset,
+        uint64_t gate_expert_bytes,
+        uint64_t down_expert_bytes,
+        uint32_t expert) {
+    for (cuda_lazy_moe_expert &e : g_lazy_moe_experts) {
+        if (cuda_lazy_moe_entry_matches(e, model_map, gate_offset, up_offset, down_offset,
+                                        gate_expert_bytes, down_expert_bytes, expert)) {
+            e.last_use = ++g_lazy_moe_use_clock;
+            return &e;
+        }
+    }
+    return NULL;
+}
+
+static void cuda_lazy_moe_evict_lru(void) {
+    if (g_lazy_moe_experts.empty()) return;
+    size_t victim = 0;
+    for (size_t i = 1; i < g_lazy_moe_experts.size(); i++) {
+        if (g_lazy_moe_experts[i].last_use < g_lazy_moe_experts[victim].last_use) victim = i;
+    }
+    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+        fprintf(stderr,
+                "ds4: CUDA lazy MoE evict layer offsets gate=%llu expert=%u\n",
+                (unsigned long long)g_lazy_moe_experts[victim].gate_offset,
+                g_lazy_moe_experts[victim].expert);
+    }
+    cuda_lazy_moe_release_one(g_lazy_moe_experts[victim]);
+    g_lazy_moe_experts.erase(g_lazy_moe_experts.begin() + victim);
+}
+
+static int cuda_lazy_moe_copy_slice(char **out, const void *model_map, uint64_t offset, uint64_t bytes, const char *what) {
+    void *dev = NULL;
+    cudaError_t err = cudaMalloc(&dev, (size_t)bytes);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: CUDA lazy MoE alloc failed for %s (%.2f MiB): %s\n",
+                what ? what : "expert",
+                (double)bytes / 1048576.0,
+                cudaGetErrorString(err));
+        (void)cudaGetLastError();
+        return 0;
+    }
+    err = cudaMemcpy(dev, (const char *)model_map + offset, (size_t)bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: CUDA lazy MoE copy failed for %s (%.2f MiB): %s\n",
+                what ? what : "expert",
+                (double)bytes / 1048576.0,
+                cudaGetErrorString(err));
+        (void)cudaFree(dev);
+        (void)cudaGetLastError();
+        return 0;
+    }
+    *out = (char *)dev;
+    return 1;
+}
+
+static cuda_lazy_moe_expert *cuda_lazy_moe_load(
+        const void *model_map,
+        uint64_t gate_offset,
+        uint64_t up_offset,
+        uint64_t down_offset,
+        uint64_t gate_expert_bytes,
+        uint64_t down_expert_bytes,
+        uint32_t expert,
+        uint64_t max_resident) {
+    cuda_lazy_moe_expert *hit = cuda_lazy_moe_find(model_map, gate_offset, up_offset, down_offset,
+                                                   gate_expert_bytes, down_expert_bytes, expert);
+    if (hit) return hit;
+    if (max_resident == 0) return NULL;
+    while (g_lazy_moe_experts.size() >= max_resident) cuda_lazy_moe_evict_lru();
+
+    cuda_lazy_moe_expert e = {};
+    e.host_base = model_map;
+    e.gate_offset = gate_offset;
+    e.up_offset = up_offset;
+    e.down_offset = down_offset;
+    e.gate_expert_bytes = gate_expert_bytes;
+    e.down_expert_bytes = down_expert_bytes;
+    e.expert = expert;
+    e.last_use = ++g_lazy_moe_use_clock;
+
+    const uint64_t gate_expert_offset = gate_offset + (uint64_t)expert * gate_expert_bytes;
+    const uint64_t up_expert_offset = up_offset + (uint64_t)expert * gate_expert_bytes;
+    const uint64_t down_expert_offset = down_offset + (uint64_t)expert * down_expert_bytes;
+    if (!cuda_lazy_moe_copy_slice(&e.gate_ptr, model_map, gate_expert_offset, gate_expert_bytes, "moe_gate_expert") ||
+        !cuda_lazy_moe_copy_slice(&e.up_ptr, model_map, up_expert_offset, gate_expert_bytes, "moe_up_expert") ||
+        !cuda_lazy_moe_copy_slice(&e.down_ptr, model_map, down_expert_offset, down_expert_bytes, "moe_down_expert")) {
+        cuda_lazy_moe_release_one(e);
+        return NULL;
+    }
+    g_lazy_moe_experts.push_back(e);
+    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+        fprintf(stderr,
+                "ds4: CUDA lazy MoE cached expert=%u %.2f MiB (resident %zu/%llu)\n",
+                expert,
+                (double)(2ull * gate_expert_bytes + down_expert_bytes) / 1048576.0,
+                g_lazy_moe_experts.size(),
+                (unsigned long long)max_resident);
+    }
+    return &g_lazy_moe_experts.back();
+}
+
 static const char *cuda_model_range_ptr_from_fd(
         const void *model_map,
         uint64_t offset,
@@ -1217,6 +1390,7 @@ static int cuda_model_copy_chunked(const void *model_map, uint64_t model_size, u
 }
 
 static void cuda_model_range_release_all(void) {
+    cuda_lazy_moe_release_all();
     for (const cuda_model_range &r : g_model_ranges) {
         if (r.host_registered && r.registered_base) {
             (void)cudaHostUnregister(r.registered_base);
@@ -8500,6 +8674,111 @@ __global__ static void moe_down_sum6_qwarp32_kernel(
     if (lane == 0) out[row] = total;
 }
 
+__global__ static void moe_gate_up_mid_ptr_qwarp32_kernel(
+        float *gate_out,
+        float *up_out,
+        float *mid_out,
+        const char * const *gate_ptrs,
+        const char * const *up_ptrs,
+        const cuda_block_q8_K *xq,
+        const int32_t *selected,
+        const float *weights,
+        uint64_t gate_row_bytes,
+        uint32_t xq_blocks,
+        uint32_t expert_mid_dim,
+        uint32_t n_expert,
+        float clamp) {
+    uint32_t lane = threadIdx.x & 7u;
+    uint32_t row_lane = threadIdx.x >> 3u;
+    uint32_t pair = blockIdx.y;
+    uint32_t tok = pair / n_expert;
+    uint32_t slot = pair - tok * n_expert;
+    int32_t expert_i = selected[(uint64_t)tok * n_expert + slot];
+    if (expert_i < 0) expert_i = 0;
+    uint32_t expert = (uint32_t)expert_i;
+    const char *gate_base = gate_ptrs[expert];
+    const char *up_base = up_ptrs[expert];
+    const cuda_block_q8_K *xqb = xq + (uint64_t)tok * xq_blocks;
+    for (uint32_t rr = 0; rr < 4u; rr++) {
+        uint32_t row = blockIdx.x * 128u + row_lane + rr * 32u;
+        if (row >= expert_mid_dim) continue;
+        const cuda_block_iq2_xxs *gr = (const cuda_block_iq2_xxs *)(gate_base + (uint64_t)row * gate_row_bytes);
+        const cuda_block_iq2_xxs *ur = (const cuda_block_iq2_xxs *)(up_base + (uint64_t)row * gate_row_bytes);
+        float gate = 0.0f;
+        float up = 0.0f;
+        for (uint32_t b = lane; b < xq_blocks; b += 8u) {
+            gate += dev_dot_iq2_xxs_q8_K_block(gr + b, xqb + b);
+            up += dev_dot_iq2_xxs_q8_K_block(ur + b, xqb + b);
+        }
+        gate = quarter_warp_sum_f32(gate, lane);
+        up = quarter_warp_sum_f32(up, lane);
+        if (lane == 0) {
+            if (clamp > 1.0e-6f) {
+                if (gate > clamp) gate = clamp;
+                if (up > clamp) up = clamp;
+                if (up < -clamp) up = -clamp;
+            }
+            const uint64_t off = (uint64_t)pair * expert_mid_dim + row;
+            gate_out[off] = gate;
+            up_out[off] = up;
+            mid_out[off] = (gate / (1.0f + expf(-gate))) * up * weights[(uint64_t)tok * n_expert + slot];
+        }
+    }
+}
+
+__global__ static void moe_down_ptr_qwarp32_kernel(
+        float *down_out,
+        const char * const *down_ptrs,
+        const cuda_block_q8_K *midq,
+        const int32_t *selected,
+        uint64_t down_row_bytes,
+        uint32_t midq_blocks,
+        uint32_t out_dim,
+        uint32_t n_expert) {
+    uint32_t lane = threadIdx.x & 7u;
+    uint32_t row = blockIdx.x * 32u + (threadIdx.x >> 3u);
+    uint32_t pair = blockIdx.y;
+    if (row >= out_dim) return;
+    uint32_t tok = pair / n_expert;
+    uint32_t slot = pair - tok * n_expert;
+    int32_t expert_i = selected[(uint64_t)tok * n_expert + slot];
+    if (expert_i < 0) expert_i = 0;
+    const char *down_base = down_ptrs[(uint32_t)expert_i];
+    const cuda_block_q2_K *wr = (const cuda_block_q2_K *)(down_base + (uint64_t)row * down_row_bytes);
+    const cuda_block_q8_K *xq = midq + (uint64_t)pair * midq_blocks;
+    float acc = 0.0f;
+    for (uint32_t b = lane; b < midq_blocks; b += 8u) acc += dev_dot_q2_K_q8_K_block(wr + b, xq + b);
+    acc = quarter_warp_sum_f32(acc, lane);
+    if (lane == 0) down_out[(uint64_t)pair * out_dim + row] = acc;
+}
+
+__global__ static void moe_down_ptr_sum6_qwarp32_kernel(
+        float *out,
+        const char * const *down_ptrs,
+        const cuda_block_q8_K *midq,
+        const int32_t *selected,
+        uint64_t down_row_bytes,
+        uint32_t midq_blocks,
+        uint32_t out_dim) {
+    uint32_t lane = threadIdx.x & 7u;
+    uint32_t row = blockIdx.x * 32u + (threadIdx.x >> 3u);
+    if (row >= out_dim) return;
+    float total = 0.0f;
+    #pragma unroll
+    for (uint32_t slot = 0; slot < 6u; slot++) {
+        int32_t expert_i = selected[slot];
+        if (expert_i < 0) expert_i = 0;
+        const char *down_base = down_ptrs[(uint32_t)expert_i];
+        const cuda_block_q2_K *wr = (const cuda_block_q2_K *)(down_base + (uint64_t)row * down_row_bytes);
+        const cuda_block_q8_K *xq = midq + (uint64_t)slot * midq_blocks;
+        float acc = 0.0f;
+        for (uint32_t b = lane; b < midq_blocks; b += 8u) acc += dev_dot_q2_K_q8_K_block(wr + b, xq + b);
+        acc = quarter_warp_sum_f32(acc, lane);
+        if (lane == 0) total += acc;
+    }
+    if (lane == 0) out[row] = total;
+}
+
 __global__ static void moe_down_sorted_qwarp32_kernel(
         float *down_out,
         const char *down_base,
@@ -9173,6 +9452,180 @@ __global__ static void moe_down_f32_kernel(
     if (threadIdx.x == 0) down_out[(uint64_t)pair * out_dim + row] = partial[0];
 }
 
+static int routed_moe_launch_lazy(
+        ds4_gpu_tensor *out,
+        ds4_gpu_tensor *gate,
+        ds4_gpu_tensor *up,
+        ds4_gpu_tensor *mid,
+        ds4_gpu_tensor *down,
+        const void *model_map,
+        uint64_t gate_offset,
+        uint64_t up_offset,
+        uint64_t down_offset,
+        uint64_t gate_expert_bytes,
+        uint64_t gate_row_bytes,
+        uint64_t down_expert_bytes,
+        uint64_t down_row_bytes,
+        uint32_t expert_in_dim,
+        uint32_t expert_mid_dim,
+        uint32_t out_dim,
+        const ds4_gpu_tensor *selected,
+        const ds4_gpu_tensor *weights,
+        uint32_t n_expert,
+        float clamp,
+        const ds4_gpu_tensor *x,
+        uint32_t n_tokens) {
+    const uint32_t pair_count = n_tokens * n_expert;
+    std::vector<int32_t> selected_host((size_t)pair_count);
+    cudaError_t err = cudaMemcpy(selected_host.data(), selected->ptr,
+                                 (size_t)pair_count * sizeof(int32_t),
+                                 cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: CUDA lazy MoE selected read failed: %s\n", cudaGetErrorString(err));
+        (void)cudaGetLastError();
+        return 0;
+    }
+
+    int selected_ids[256] = {0};
+    uint32_t unique = 0;
+    for (uint32_t i = 0; i < pair_count; i++) {
+        int32_t id = selected_host[i];
+        if (id < 0) id = 0;
+        if (id >= 256) return 0;
+        if (!selected_ids[id]) {
+            selected_ids[id] = 1;
+            unique++;
+        }
+    }
+
+    const uint64_t max_resident = cuda_lazy_moe_max_resident_experts();
+    static int lazy_notice_printed;
+    if (!lazy_notice_printed) {
+        fprintf(stderr,
+                "ds4: CUDA lazy MoE resident expert limit=%llu (set DS4_CUDA_LAZY_MAX_RESIDENT_EXPERTS)\n",
+                (unsigned long long)max_resident);
+        lazy_notice_printed = 1;
+    }
+    static int overflow_notice_printed;
+    if (unique > max_resident && !overflow_notice_printed) {
+        fprintf(stderr,
+                "ds4: CUDA lazy MoE saw %u unique experts in one call; only %llu are cached, the rest stay direct\n",
+                unique,
+                (unsigned long long)max_resident);
+        overflow_notice_printed = 1;
+    }
+
+    std::vector<const char *> gate_ptrs(256);
+    std::vector<const char *> up_ptrs(256);
+    std::vector<const char *> down_ptrs(256);
+    for (uint32_t e = 0; e < 256u; e++) {
+        gate_ptrs[e] = cuda_model_ptr(model_map, gate_offset + (uint64_t)e * gate_expert_bytes);
+        up_ptrs[e] = cuda_model_ptr(model_map, up_offset + (uint64_t)e * gate_expert_bytes);
+        down_ptrs[e] = cuda_model_ptr(model_map, down_offset + (uint64_t)e * down_expert_bytes);
+    }
+
+    uint64_t cached_this_call = 0;
+    for (uint32_t e = 0; e < 256u && cached_this_call < max_resident; e++) {
+        if (!selected_ids[e]) continue;
+        cuda_lazy_moe_expert *entry = cuda_lazy_moe_load(model_map,
+                                                         gate_offset,
+                                                         up_offset,
+                                                         down_offset,
+                                                         gate_expert_bytes,
+                                                         down_expert_bytes,
+                                                         e,
+                                                         max_resident);
+        if (!entry) continue;
+        gate_ptrs[e] = entry->gate_ptr;
+        up_ptrs[e] = entry->up_ptr;
+        down_ptrs[e] = entry->down_ptr;
+        cached_this_call++;
+    }
+
+    const uint64_t ptr_table_bytes = 3ull * 256ull * sizeof(char *);
+    char **dev_gate_ptrs = (char **)cuda_tmp_alloc(ptr_table_bytes, "lazy moe pointer table");
+    if (!dev_gate_ptrs) return 0;
+    char **dev_up_ptrs = dev_gate_ptrs + 256;
+    char **dev_down_ptrs = dev_up_ptrs + 256;
+    err = cudaMemcpy(dev_gate_ptrs, gate_ptrs.data(), 256u * sizeof(char *), cudaMemcpyHostToDevice);
+    if (err == cudaSuccess) err = cudaMemcpy(dev_up_ptrs, up_ptrs.data(), 256u * sizeof(char *), cudaMemcpyHostToDevice);
+    if (err == cudaSuccess) err = cudaMemcpy(dev_down_ptrs, down_ptrs.data(), 256u * sizeof(char *), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: CUDA lazy MoE pointer table copy failed: %s\n", cudaGetErrorString(err));
+        (void)cudaGetLastError();
+        return 0;
+    }
+
+    int ok = 1;
+    const uint32_t xq_blocks = expert_in_dim / CUDA_QK_K;
+    const uint32_t midq_blocks = expert_mid_dim / CUDA_QK_K;
+    const uint64_t xq_count = (uint64_t)n_tokens * xq_blocks;
+    const uint64_t midq_count = (uint64_t)n_tokens * n_expert * midq_blocks;
+    const uint64_t xq_bytes = xq_count * sizeof(cuda_block_q8_K);
+    const uint64_t midq_bytes = midq_count * sizeof(cuda_block_q8_K);
+    if (down->bytes < xq_bytes || gate->bytes < midq_bytes) return 0;
+
+    cuda_block_q8_K *xq = (cuda_block_q8_K *)down->ptr;
+    cuda_block_q8_K *midq = (cuda_block_q8_K *)gate->ptr;
+    dim3 xq_grid(xq_blocks, n_tokens, 1);
+    q8_K_quantize_kernel<<<xq_grid, 256>>>(xq, (const float *)x->ptr, expert_in_dim, n_tokens);
+    ok = cuda_ok(cudaGetLastError(), "lazy routed_moe x quantize launch");
+
+    if (ok) {
+        dim3 qgrid((expert_mid_dim + 127u) / 128u, n_tokens * n_expert, 1);
+        moe_gate_up_mid_ptr_qwarp32_kernel<<<qgrid, 256>>>(
+            (float *)gate->ptr,
+            (float *)up->ptr,
+            (float *)mid->ptr,
+            (const char * const *)dev_gate_ptrs,
+            (const char * const *)dev_up_ptrs,
+            xq,
+            (const int32_t *)selected->ptr,
+            (const float *)weights->ptr,
+            gate_row_bytes,
+            xq_blocks,
+            expert_mid_dim,
+            n_expert,
+            clamp);
+        ok = cuda_ok(cudaGetLastError(), "lazy routed_moe gate/up launch");
+    }
+    if (ok) {
+        dim3 midq_grid(midq_blocks, n_tokens * n_expert, 1);
+        q8_K_quantize_kernel<<<midq_grid, 256>>>(midq, (const float *)mid->ptr, expert_mid_dim, n_tokens * n_expert);
+        ok = cuda_ok(cudaGetLastError(), "lazy routed_moe mid quantize launch");
+    }
+    if (ok && n_tokens == 1u && n_expert == 6u) {
+        dim3 sgrid((out_dim + 31u) / 32u, 1, 1);
+        moe_down_ptr_sum6_qwarp32_kernel<<<sgrid, 256>>>(
+            (float *)out->ptr,
+            (const char * const *)dev_down_ptrs,
+            midq,
+            (const int32_t *)selected->ptr,
+            down_row_bytes,
+            midq_blocks,
+            out_dim);
+        ok = cuda_ok(cudaGetLastError(), "lazy routed_moe down sum6 launch");
+    } else if (ok) {
+        dim3 dgrid((out_dim + 31u) / 32u, n_tokens * n_expert, 1);
+        moe_down_ptr_qwarp32_kernel<<<dgrid, 256>>>(
+            (float *)down->ptr,
+            (const char * const *)dev_down_ptrs,
+            midq,
+            (const int32_t *)selected->ptr,
+            down_row_bytes,
+            midq_blocks,
+            out_dim,
+            n_expert);
+        ok = cuda_ok(cudaGetLastError(), "lazy routed_moe down launch");
+        if (ok) {
+            uint64_t n = (uint64_t)n_tokens * out_dim;
+            moe_sum_kernel<<<(n + 255) / 256, 256>>>((float *)out->ptr, (const float *)down->ptr, out_dim, n_expert, n_tokens);
+            ok = cuda_ok(cudaGetLastError(), "lazy routed_moe sum launch");
+        }
+    }
+    return ok;
+}
+
 static int routed_moe_launch(
         ds4_gpu_tensor *out,
         ds4_gpu_tensor *gate,
@@ -9222,6 +9675,26 @@ static int routed_moe_launch(
         return 0;
     }
     cuda_moe_log_expert_stats(selected, n_tokens, n_expert);
+    if (cuda_lazy_moe_enabled()) {
+        return routed_moe_launch_lazy(out, gate, up, mid, down,
+                                      model_map,
+                                      gate_offset,
+                                      up_offset,
+                                      down_offset,
+                                      gate_expert_bytes,
+                                      gate_row_bytes,
+                                      down_expert_bytes,
+                                      down_row_bytes,
+                                      expert_in_dim,
+                                      expert_mid_dim,
+                                      out_dim,
+                                      selected,
+                                      weights,
+                                      n_expert,
+                                      clamp,
+                                      x,
+                                      n_tokens);
+    }
     const char *gate_w = cuda_model_range_ptr(model_map, gate_offset, gate_bytes, "moe_gate");
     const char *up_w = cuda_model_range_ptr(model_map, up_offset, gate_bytes, "moe_up");
     const char *down_w = cuda_model_range_ptr(model_map, down_offset, down_bytes, "moe_down");

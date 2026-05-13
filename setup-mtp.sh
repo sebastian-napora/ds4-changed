@@ -7,6 +7,7 @@
 #   - Ensures the MTP support GGUF exists.
 #   - Builds ds4 / ds4-server if needed.
 #   - Starts ds4-server with --mtp and --mtp-draft 2.
+#   - Uses temperature 0 for CLI runs so the MTP speculative path is active.
 #
 # Examples:
 #   ./setup-mtp.sh
@@ -35,6 +36,7 @@ MAIN_MODEL_TARGET="${DS4_MAIN_MODEL:-q2-imatrix}"
 MTP_PATH="${DS4_MTP:-"$GGUF_DIR/$MTP_FILE"}"
 MTP_DRAFT="${DS4_MTP_DRAFT:-2}"
 MTP_MARGIN="${DS4_MTP_MARGIN:-3}"
+DS4_TEMP="${DS4_TEMP:-0}"
 DS4_CTX="${DS4_CTX:-100000}"
 DS4_HOST="${DS4_HOST:-0.0.0.0}"
 DS4_PORT="${DS4_PORT:-11112}"
@@ -56,6 +58,7 @@ Options:
   --mtp PATH           MTP GGUF path. Default: ./gguf/$MTP_FILE
   --mtp-draft N        Speculative draft tokens. Default: 2
   --mtp-margin F       MTP confidence margin. Default: 3
+  --temp F             CLI sampling temperature. Default: 0
   -h, --help           Show this help.
 
 Environment:
@@ -65,6 +68,7 @@ Environment:
   DS4_MTP             MTP GGUF path override.
   DS4_MTP_DRAFT       Same as --mtp-draft.
   DS4_MTP_MARGIN      Same as --mtp-margin.
+  DS4_TEMP            Same as --temp for CLI mode. Default: 0
   DS4_CTX             Server context. Default: 100000
   DS4_HOST            Server host. Default: 0.0.0.0
   DS4_PORT            Server port. Default: 11112
@@ -73,7 +77,8 @@ Environment:
 
 Notes:
   MTP speculative decoding is used only for greedy generation. For API clients,
-  send temperature: 0. Thinking mode also disables the greedy path internally.
+  send temperature: 0 in each request. Thinking mode also disables the greedy
+  path internally, so use think:false or model:deepseek-chat.
 
 Examples:
   $0
@@ -132,6 +137,14 @@ while [ "$#" -gt 0 ]; do
                 exit 1
             fi
             MTP_MARGIN="$1"
+            ;;
+        --temp)
+            shift
+            if [ "$#" -eq 0 ]; then
+                echo "Missing value after --temp" >&2
+                exit 1
+            fi
+            DS4_TEMP="$1"
             ;;
         -h|--help)
             usage
@@ -205,7 +218,7 @@ fi
 
 case "$MODE" in
     cli)
-        CMD=(./ds4 --nothink --mtp "$MTP_PATH" --mtp-draft "$MTP_DRAFT" --mtp-margin "$MTP_MARGIN")
+        CMD=(./ds4 --nothink --temp "$DS4_TEMP" --mtp "$MTP_PATH" --mtp-draft "$MTP_DRAFT" --mtp-margin "$MTP_MARGIN")
         if [ -n "$PROMPT" ]; then
             CMD+=(-p "$PROMPT")
         fi
@@ -227,7 +240,7 @@ case "$MODE" in
         CMD+=("${EXTRA_ARGS[@]}")
         echo "Starting server with MTP speculative decoding"
         echo "Server: http://$DS4_HOST:$DS4_PORT/v1/chat/completions"
-        echo "Use temperature: 0 in requests to hit the speculative path."
+        echo "Use temperature: 0 and think:false in requests to hit the speculative path."
         echo "Command: ${CMD[*]}"
         exec "${CMD[@]}"
         ;;
