@@ -153,6 +153,56 @@ run_shell_logged() {
     return "$status"
 }
 
+repo_files() {
+    if command -v rg >/dev/null 2>&1; then
+        rg --files --glob '!venv/**' --glob '!gguf/**' --glob '!summary-logs/**'
+    else
+        find . \
+            -path './.git' -prune -o \
+            -path './venv' -prune -o \
+            -path './gguf' -prune -o \
+            -path './summary-logs' -prune -o \
+            -type f -print | sed 's#^\./##'
+    fi
+}
+
+repo_shell_files() {
+    if command -v rg >/dev/null 2>&1; then
+        rg --files -g '*.sh' --glob '!venv/**' --glob '!summary-logs/**'
+    else
+        find . \
+            -path './.git' -prune -o \
+            -path './venv' -prune -o \
+            -path './gguf' -prune -o \
+            -path './summary-logs' -prune -o \
+            -type f -name '*.sh' -print | sed 's#^\./##'
+    fi
+}
+
+file_inventory() {
+    local log="$SESSION_DIR/file-inventory.log"
+    local status
+
+    {
+        echo "\$ repo file inventory"
+        echo "started_at=$(date -Iseconds)"
+        echo
+    } > "$log"
+
+    set +e
+    repo_files | sort >> "$log" 2>&1
+    status=$?
+    set -e
+
+    {
+        echo
+        echo "finished_at=$(date -Iseconds)"
+        echo "exit_status=$status"
+    } >> "$log"
+
+    return "$status"
+}
+
 write_manifest() {
     {
         echo "# Repository Session"
@@ -201,11 +251,17 @@ scan_content() {
         echo
         echo "## TODO/FIXME/HACK/BUG/NOTE"
         echo
-        rg -n "TODO|FIXME|HACK|BUG|NOTE" \
-            --glob '!venv/**' \
-            --glob '!gguf/**' \
-            --glob '!summary-logs/**' \
-            --glob '!*.gguf' . || true
+        if command -v rg >/dev/null 2>&1; then
+            rg -n "TODO|FIXME|HACK|BUG|NOTE" \
+                --glob '!venv/**' \
+                --glob '!gguf/**' \
+                --glob '!summary-logs/**' \
+                --glob '!*.gguf' . || true
+        else
+            repo_files | grep -v '\.gguf$' | while IFS= read -r file; do
+                grep -InE "TODO|FIXME|HACK|BUG|NOTE" "$file" /dev/null 2>/dev/null || true
+            done
+        fi
         echo
         echo "## Large or generated-looking files"
         echo
@@ -233,7 +289,7 @@ shell_syntax_check() {
             echo "exit_status=$?"
             echo
         } >> "$SESSION_DIR/shell-syntax.log" 2>&1 || status=1
-    done < <(rg --files -g '*.sh' --glob '!venv/**' --glob '!summary-logs/**' | sort)
+    done < <(repo_shell_files | sort)
 
     return "$status"
 }
@@ -344,7 +400,7 @@ run_logged git-status git status --short --branch || true
 run_logged git-history git log --oneline --decorate --graph -n 40 || true
 run_logged git-diff git diff --stat || true
 run_logged git-diff-names git diff --name-status || true
-run_logged file-inventory bash -lc "rg --files --glob '!venv/**' --glob '!gguf/**' --glob '!summary-logs/**' | sort" || true
+file_inventory || true
 tool_versions
 scan_content
 shell_syntax_check || true
