@@ -31,7 +31,7 @@ validation, verification, git history, content checks, and optional commands.
 
 Options:
   --with-build          Run make and log the result.
-  --with-tests          Run make test and log the result.
+  --with-tests          Run ./run-tests-logged.sh and log each test separately.
   --with-mcp            Try to log MCP CLI state if a local CLI is available.
   --cmd COMMAND         Run COMMAND through bash -lc and log it separately.
                         May be repeated.
@@ -46,7 +46,7 @@ Environment:
 Examples:
   $0
   $0 --with-build --with-tests
-  $0 --cmd "git diff --stat" --cmd "make test"
+  $0 --cmd "git diff --stat" --cmd "./run-tests-logged.sh"
 EOF
 }
 
@@ -337,6 +337,40 @@ mcp_check() {
     } > "$SESSION_DIR/mcp.log"
 }
 
+run_tests_logged() {
+    local log="$SESSION_DIR/test.log"
+    local status
+
+    {
+        echo "\$ ./run-tests-logged.sh --log-dir $SESSION_DIR/tests"
+        echo "started_at=$(date -Iseconds)"
+        echo
+    } > "$log"
+
+    if [ ! -x "$SCRIPT_DIR/run-tests-logged.sh" ]; then
+        {
+            echo "Missing executable ./run-tests-logged.sh"
+            echo
+            echo "finished_at=$(date -Iseconds)"
+            echo "exit_status=1"
+        } >> "$log"
+        return 1
+    fi
+
+    set +e
+    "$SCRIPT_DIR/run-tests-logged.sh" --log-dir "$SESSION_DIR/tests" >> "$log" 2>&1
+    status=$?
+    set -e
+
+    {
+        echo
+        echo "finished_at=$(date -Iseconds)"
+        echo "exit_status=$status"
+    } >> "$log"
+
+    return "$status"
+}
+
 write_assessment() {
     local dirty="no"
     local shell_status="unknown"
@@ -414,7 +448,7 @@ if [ "$RUN_BUILD" -eq 1 ]; then
 fi
 
 if [ "$RUN_TESTS" -eq 1 ]; then
-    run_logged test make test || true
+    run_tests_logged || true
 fi
 
 if [ "${#COMMANDS[@]}" -gt 0 ]; then

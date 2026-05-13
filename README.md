@@ -666,8 +666,10 @@ that final snapshot, use:
 DS4_SUMMARY_FINAL_TESTS=1 ./start-low-gpu-summary.sh
 ```
 
-The final test runner is `repo-session.sh --with-tests`, which calls `make test`
-and writes the result to that session's `test.log`.
+The final test runner is `repo-session.sh --with-tests`, which calls
+`run-tests-logged.sh`. That script builds `ds4_test`, runs `./ds4_test --list`,
+then runs each listed test one by one with a separate log under that session's
+`tests/` directory.
 
 Repository assessment sessions can be created with:
 
@@ -680,6 +682,13 @@ Repository assessment sessions can be created with:
 Each session writes separate timestamped logs under `summary-logs/` for git
 state/history, content scans, shell-script syntax checks, optional build/test
 runs, optional MCP CLI checks, and any explicit commands passed with `--cmd`.
+
+To run only the tests with separated logs:
+
+```sh
+./run-tests-logged.sh
+./run-tests-logged.sh --test --server --test --logprob-vectors
+```
 
 There is also a CPU reference/debug path:
 
