@@ -19,11 +19,17 @@ LOG_ROOT="${DS4_SUMMARY_LOG_ROOT:-"$SCRIPT_DIR/summary-logs"}"
 SESSION_NAME="${DS4_SUMMARY_SESSION_NAME:-low-gpu-$(date +%Y%m%d-%H%M%S)}"
 SESSION_DIR="$LOG_ROOT/$SESSION_NAME"
 INTERVAL="${DS4_SUMMARY_INTERVAL:-30}"
+FINAL_REPO_SESSION="${DS4_SUMMARY_FINAL_REPO_SESSION:-1}"
+FINAL_BUILD="${DS4_SUMMARY_FINAL_BUILD:-0}"
+FINAL_TESTS="${DS4_SUMMARY_FINAL_TESTS:-0}"
+FINAL_MCP="${DS4_SUMMARY_FINAL_MCP:-0}"
+FINAL_CMD="${DS4_SUMMARY_FINAL_CMD:-}"
 
 RUN_LOG="$SESSION_DIR/run.log"
 SUMMARY_FILE="$SESSION_DIR/summary.md"
 TIMELINE_LOG="$SESSION_DIR/timeline.log"
 ENV_LOG="$SESSION_DIR/env.log"
+FINAL_REPO_LOG="$SESSION_DIR/final-repo-session.log"
 
 START_PID=""
 SUMMARY_PID=""
@@ -40,6 +46,12 @@ Environment:
   DS4_SUMMARY_LOG_ROOT      Log root. Default: ./summary-logs
   DS4_SUMMARY_SESSION_NAME  Session directory name. Default: low-gpu-timestamp
   DS4_SUMMARY_INTERVAL      Snapshot interval in seconds. Default: 30
+  DS4_SUMMARY_FINAL_REPO_SESSION
+                           Run repo-session.sh when the model exits. Default: 1
+  DS4_SUMMARY_FINAL_BUILD   Add --with-build to the final repo session. Default: 0
+  DS4_SUMMARY_FINAL_TESTS   Add --with-tests to the final repo session. Default: 0
+  DS4_SUMMARY_FINAL_MCP     Add --with-mcp to the final repo session. Default: 0
+  DS4_SUMMARY_FINAL_CMD     Extra command to log in the final repo session.
 
 All start-low-gpu.sh environment variables are passed through, for example:
   DS4_MODEL, DS4_PORT, LITE_LLM_PORT, DS4_CTX, MAX_RAM_GB, GPU_POWER_LIMIT
@@ -47,6 +59,7 @@ All start-low-gpu.sh environment variables are passed through, for example:
 Examples:
   $0
   DS4_SUMMARY_INTERVAL=10 $0
+  DS4_SUMMARY_FINAL_TESTS=1 $0
   DS4_MODEL=/models/ds4.gguf DS4_SUMMARY_SESSION_NAME=low-gpu-test $0
 EOF
 }
@@ -80,6 +93,11 @@ write_env_log() {
         echo "max_ram_gb=${MAX_RAM_GB:-124}"
         echo "max_ram_percent=${MAX_RAM_PERCENT:-95}"
         echo "gpu_power_limit_percent=${GPU_POWER_LIMIT:-15}"
+        echo "final_repo_session=$FINAL_REPO_SESSION"
+        echo "final_build=$FINAL_BUILD"
+        echo "final_tests=$FINAL_TESTS"
+        echo "final_mcp=$FINAL_MCP"
+        echo "final_cmd=$FINAL_CMD"
     } > "$ENV_LOG"
 }
 
@@ -240,6 +258,60 @@ cleanup() {
     fi
 }
 
+run_final_repo_session() {
+    local start_status="$1"
+    local args=()
+
+    if [ "$FINAL_REPO_SESSION" = "0" ]; then
+        return 0
+    fi
+
+    if [ ! -x "$SCRIPT_DIR/repo-session.sh" ]; then
+        {
+            echo "repo-session.sh is missing or not executable"
+            echo "path=$SCRIPT_DIR/repo-session.sh"
+        } > "$FINAL_REPO_LOG"
+        return 0
+    fi
+
+    args+=("--session-name" "$SESSION_NAME-final")
+    args+=("--note" "Automatic final repository snapshot after $SESSION_NAME exited with status $start_status.")
+    args+=("--note" "Runtime summary: $SUMMARY_FILE")
+    args+=("--note" "Runtime log: $RUN_LOG")
+
+    if [ "$FINAL_BUILD" != "0" ]; then
+        args+=("--with-build")
+    fi
+    if [ "$FINAL_TESTS" != "0" ]; then
+        args+=("--with-tests")
+    fi
+    if [ "$FINAL_MCP" != "0" ]; then
+        args+=("--with-mcp")
+    fi
+    if [ -n "$FINAL_CMD" ]; then
+        args+=("--cmd" "$FINAL_CMD")
+    fi
+
+    {
+        echo "Starting final repository session at $(date -Iseconds)"
+        echo "Command: ./repo-session.sh ${args[*]}"
+        echo
+    } > "$FINAL_REPO_LOG"
+
+    set +e
+    REPO_SESSION_LOG_ROOT="$LOG_ROOT" "$SCRIPT_DIR/repo-session.sh" "${args[@]}" >> "$FINAL_REPO_LOG" 2>&1
+    local repo_status=$?
+    set -e
+
+    {
+        echo
+        echo "finished_at=$(date -Iseconds)"
+        echo "exit_status=$repo_status"
+    } >> "$FINAL_REPO_LOG"
+
+    return 0
+}
+
 trap 'cleanup interrupted; exit 130' INT
 trap 'cleanup terminated; exit 143' TERM
 
@@ -260,5 +332,7 @@ START_STATUS=$?
 set -e
 
 cleanup "exited:$START_STATUS"
+run_final_repo_session "$START_STATUS"
 echo "Summary written to: $SUMMARY_FILE"
+echo "Final repo session log: $FINAL_REPO_LOG"
 exit "$START_STATUS"

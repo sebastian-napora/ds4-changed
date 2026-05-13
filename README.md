@@ -658,6 +658,17 @@ This wraps `start-low-gpu.sh` and writes a timestamped session under
 and an append-only `timeline.log`. Adjust the refresh interval with
 `DS4_SUMMARY_INTERVAL=10 ./start-low-gpu-summary.sh`.
 
+When the model process exits, the wrapper also creates an automatic final
+repository snapshot by running `repo-session.sh`. To run the project tests in
+that final snapshot, use:
+
+```sh
+DS4_SUMMARY_FINAL_TESTS=1 ./start-low-gpu-summary.sh
+```
+
+The final test runner is `repo-session.sh --with-tests`, which calls `make test`
+and writes the result to that session's `test.log`.
+
 Repository assessment sessions can be created with:
 
 ```sh
