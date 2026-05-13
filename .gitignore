@@ -10,5 +10,6 @@
 *.o
 *.dSYM/
 /misc/
+/summary-logs/
 .*.swp
 .DS_Store

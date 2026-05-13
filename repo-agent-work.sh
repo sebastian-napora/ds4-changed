@@ -19,6 +19,7 @@ SESSION_DIR="$LOG_ROOT/$SESSION_NAME"
 
 RUN_MODEL=0
 EXPERT_TRACE="summary"
+SMOKE_PROMPT="Briefly answer: repository logging smoke test."
 RUN_BUILD=0
 RUN_TESTS=0
 RUN_MCP=0
@@ -46,6 +47,9 @@ Model/expert tracing:
   --expert-summary          Save router expert summary logs. Default.
   --expert-detail           Save sampled per-row expert IDs/weights/probs.
   --no-expert-trace         Start model without DS4_ROUTER_TRACE.
+  --smoke-prompt TEXT       Prompt sent after server readiness to create
+                            expert routing logs. Default: short smoke prompt.
+  --no-smoke-prompt         Do not send an automatic prompt.
 
 Logged phase commands:
   --setup-cmd COMMAND       Log setup command.
@@ -68,6 +72,7 @@ Environment:
 Examples:
   $0 --with-tests --with-mcp
   $0 --start-model --with-tests --expert-summary
+  $0 --start-model --expert-detail --smoke-prompt "Say hello in one sentence."
   $0 --setup-cmd "./setup-mtp.sh --setup-only" --verify-cmd "git status --short"
 EOF
 }
@@ -119,6 +124,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-expert-trace)
             EXPERT_TRACE=""
+            ;;
+        --smoke-prompt)
+            shift
+            [ "$#" -gt 0 ] || { echo "Missing value after --smoke-prompt" >&2; exit 1; }
+            SMOKE_PROMPT="$1"
+            ;;
+        --no-smoke-prompt)
+            SMOKE_PROMPT=""
             ;;
         --setup-cmd)
             shift
@@ -216,6 +229,7 @@ write_readme() {
         echo "- Repository: $SCRIPT_DIR"
         echo "- Start model: $RUN_MODEL"
         echo "- Expert trace: ${EXPERT_TRACE:-disabled}"
+        echo "- Smoke prompt: ${SMOKE_PROMPT:-disabled}"
         echo "- Build: $RUN_BUILD"
         echo "- Tests: $RUN_TESTS"
         echo "- MCP: $RUN_MCP"
@@ -266,7 +280,7 @@ run_baseline() {
     if [ "$RUN_BUILD" -ne 0 ]; then
         args+=("--with-build")
     fi
-    if [ "$RUN_TESTS" -ne 0 ]; then
+    if [ "$RUN_TESTS" -ne 0 ] && [ "$RUN_MODEL" -eq 0 ]; then
         args+=("--with-tests")
     fi
     if [ "$RUN_MCP" -ne 0 ]; then
@@ -279,8 +293,14 @@ run_baseline() {
         echo
     } > "$SESSION_DIR/repo-session.log"
 
+    echo "Running repository baseline. Log: $SESSION_DIR/repo-session.log"
+    if [ "$RUN_TESTS" -ne 0 ] && [ "$RUN_MODEL" -ne 0 ]; then
+        echo "Deferring tests until after the model exits to avoid the ds4 lock."
+        echo "Deferring tests until after the model exits to avoid the ds4 lock." >> "$SESSION_DIR/repo-session.log"
+    fi
+
     set +e
-    REPO_SESSION_LOG_ROOT="$SESSION_DIR" "$SCRIPT_DIR/repo-session.sh" "${args[@]}" >> "$SESSION_DIR/repo-session.log" 2>&1
+    REPO_SESSION_LOG_ROOT="$SESSION_DIR" "$SCRIPT_DIR/repo-session.sh" "${args[@]}" 2>&1 | tee -a "$SESSION_DIR/repo-session.log"
     local status=$?
     set -e
 
@@ -303,6 +323,7 @@ run_phases() {
         local cmd="${PHASE_COMMANDS[$i]}"
         local log
         log="$SESSION_DIR/phases/$(printf "%02d" "$n")-$phase.log"
+        echo "Running phase '$phase'. Log: $log"
         run_shell_log "$phase" "$cmd" "$log" || status=1
     done
 
@@ -317,8 +338,18 @@ run_model() {
         echo "\$ ./start-low-gpu-summary.sh"
         echo "started_at=$(date -Iseconds)"
         echo "expert_trace=${EXPERT_TRACE:-disabled}"
+        echo "smoke_prompt=${SMOKE_PROMPT:-disabled}"
         echo
     } > "$log"
+
+    echo "Starting model. Live output is also saved to: $log"
+    echo "Session folder: $SESSION_DIR/model"
+    if [ -n "$SMOKE_PROMPT" ]; then
+        echo "A smoke prompt will be sent after the server is ready so expert routing appears in model/run.log."
+    else
+        echo "No smoke prompt configured; expert routing appears only after you send a request."
+    fi
+    echo "Press Ctrl+C to stop the model. Final repo snapshot/tests run after shutdown."
 
     set +e
     DS4_SUMMARY_LOG_ROOT="$SESSION_DIR" \
@@ -326,8 +357,9 @@ run_model() {
     DS4_SUMMARY_FINAL_REPO_SESSION=1 \
     DS4_SUMMARY_FINAL_TESTS="$RUN_TESTS" \
     DS4_SUMMARY_FINAL_MCP="$RUN_MCP" \
+    DS4_SUMMARY_SMOKE_PROMPT="$SMOKE_PROMPT" \
     DS4_ROUTER_TRACE="$EXPERT_TRACE" \
-    "$SCRIPT_DIR/start-low-gpu-summary.sh" >> "$log" 2>&1
+    "$SCRIPT_DIR/start-low-gpu-summary.sh" 2>&1 | tee -a "$log"
     status=$?
     set -e
 

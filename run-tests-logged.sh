@@ -18,6 +18,7 @@ SESSION_NAME="${DS4_TEST_SESSION_NAME:-tests-$(date +%Y%m%d-%H%M%S)}"
 SESSION_DIR="$LOG_ROOT/$SESSION_NAME"
 BUILD=1
 LIST_ONLY=0
+SKIP_BUSY_MODEL="${DS4_TEST_SKIP_BUSY_MODEL:-1}"
 TESTS=()
 
 usage() {
@@ -39,6 +40,10 @@ Environment:
   DS4_TEST_LOG_ROOT      Log root. Default: ./summary-logs
   DS4_TEST_SESSION_NAME  Session directory name. Default: tests-timestamp
   DS4_TEST_MODEL         Passed through to ds4_test when set.
+  DS4_TEST_SKIP_BUSY_MODEL
+                         Skip model-dependent tests if another ds4 process
+                         holds the instance lock. Default: 1
+  DS4_LOCK_FILE          Lock file checked for busy model. Default: /tmp/ds4.lock
 
 Examples:
   $0
@@ -124,6 +129,51 @@ safe_name() {
     printf "%s" "$1" | sed 's/^--//; s/[^A-Za-z0-9_.-]/_/g'
 }
 
+is_model_dependent_test() {
+    case "$1" in
+        --long-context|--tool-call-quality|--logprob-vectors)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+ds4_lock_owner() {
+    local lock_file="${DS4_LOCK_FILE:-/tmp/ds4.lock}"
+    local owner=""
+
+    if [ -s "$lock_file" ]; then
+        owner="$(sed -n '1s/[^0-9].*//p' "$lock_file" 2>/dev/null || true)"
+        if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+            printf "%s" "$owner"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+write_skip_log() {
+    local log="$1"
+    local test_flag="$2"
+    local owner="$3"
+
+    {
+        echo "\$ ./ds4_test $test_flag"
+        echo "started_at=$(date -Iseconds)"
+        echo
+        echo "skipped: model-dependent test requires exclusive ds4 instance lock"
+        echo "active_ds4_pid=$owner"
+        echo "lock_file=${DS4_LOCK_FILE:-/tmp/ds4.lock}"
+        echo "Set DS4_TEST_SKIP_BUSY_MODEL=0 to attempt the test anyway."
+        echo
+        echo "finished_at=$(date -Iseconds)"
+        echo "exit_status=77"
+    } > "$log"
+}
+
 write_readme() {
     {
         echo "# Logged Test Session"
@@ -133,6 +183,7 @@ write_readme() {
         echo "- Directory: $SESSION_DIR"
         echo "- Build enabled: $BUILD"
         echo "- List only: $LIST_ONLY"
+        echo "- Skip busy model tests: $SKIP_BUSY_MODEL"
         echo
         echo "## Files"
         echo
@@ -174,6 +225,9 @@ discover_tests() {
 
 write_summary() {
     local final_status="$1"
+    local passed=0
+    local failed=0
+    local skipped=0
     {
         echo "# Test Summary"
         echo
@@ -199,14 +253,26 @@ write_summary() {
             name="$(basename "$log")"
             status="$(sed -n 's/^exit_status=//p' "$log" | tail -n 1)"
             [ -n "$status" ] || status="unknown"
+            case "$status" in
+                0) passed=$((passed + 1)) ;;
+                77) skipped=$((skipped + 1)) ;;
+                *) failed=$((failed + 1)) ;;
+            esac
             echo "- $name: $status"
         done
+        echo
+        echo "## Counts"
+        echo
+        echo "- Passed logs: $passed"
+        echo "- Skipped logs: $skipped"
+        echo "- Failed logs: $failed"
     } > "$SESSION_DIR/summary.md"
 }
 
 write_readme
 
 overall_status=0
+skip_count=0
 
 if [ "$BUILD" -ne 0 ]; then
     log_command "$SESSION_DIR/00-build-ds4-test.log" make ds4_test || overall_status=1
@@ -231,13 +297,25 @@ if [ "$LIST_ONLY" -eq 0 ]; then
     while IFS= read -r test_flag; do
         [ -n "$test_flag" ] || continue
         log_name="$(printf "%02d-%s.log" "$index" "$(safe_name "$test_flag")")"
+        if [ "$SKIP_BUSY_MODEL" != "0" ] && is_model_dependent_test "$test_flag"; then
+            if owner="$(ds4_lock_owner)"; then
+                write_skip_log "$SESSION_DIR/$log_name" "$test_flag" "$owner"
+                skip_count=$((skip_count + 1))
+                index=$((index + 1))
+                continue
+            fi
+        fi
         log_command "$SESSION_DIR/$log_name" ./ds4_test "$test_flag" || overall_status=1
         index=$((index + 1))
     done < "$SESSION_DIR/test-plan.txt"
 fi
 
 if [ "$overall_status" -eq 0 ]; then
-    write_summary "passed"
+    if [ "$skip_count" -gt 0 ]; then
+        write_summary "passed-with-skips"
+    else
+        write_summary "passed"
+    fi
 else
     write_summary "failed"
 fi

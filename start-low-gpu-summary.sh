@@ -24,15 +24,19 @@ FINAL_BUILD="${DS4_SUMMARY_FINAL_BUILD:-0}"
 FINAL_TESTS="${DS4_SUMMARY_FINAL_TESTS:-0}"
 FINAL_MCP="${DS4_SUMMARY_FINAL_MCP:-0}"
 FINAL_CMD="${DS4_SUMMARY_FINAL_CMD:-}"
+SMOKE_PROMPT="${DS4_SUMMARY_SMOKE_PROMPT:-}"
+SMOKE_TIMEOUT="${DS4_SUMMARY_SMOKE_TIMEOUT:-240}"
 
 RUN_LOG="$SESSION_DIR/run.log"
 SUMMARY_FILE="$SESSION_DIR/summary.md"
 TIMELINE_LOG="$SESSION_DIR/timeline.log"
 ENV_LOG="$SESSION_DIR/env.log"
 FINAL_REPO_LOG="$SESSION_DIR/final-repo-session.log"
+SMOKE_LOG="$SESSION_DIR/smoke-request.log"
 
 START_PID=""
 SUMMARY_PID=""
+SMOKE_PID=""
 
 usage() {
     cat <<EOF
@@ -52,6 +56,9 @@ Environment:
   DS4_SUMMARY_FINAL_TESTS   Add --with-tests to the final repo session. Default: 0
   DS4_SUMMARY_FINAL_MCP     Add --with-mcp to the final repo session. Default: 0
   DS4_SUMMARY_FINAL_CMD     Extra command to log in the final repo session.
+  DS4_SUMMARY_SMOKE_PROMPT  Optional prompt sent after server is ready.
+                           Useful with DS4_ROUTER_TRACE to force expert logs.
+  DS4_SUMMARY_SMOKE_TIMEOUT Seconds to wait for server readiness. Default: 240
 
 All start-low-gpu.sh environment variables are passed through, for example:
   DS4_MODEL, DS4_PORT, LITE_LLM_PORT, DS4_CTX, MAX_RAM_GB, GPU_POWER_LIMIT
@@ -60,6 +67,7 @@ Examples:
   $0
   DS4_SUMMARY_INTERVAL=10 $0
   DS4_SUMMARY_FINAL_TESTS=1 $0
+  DS4_ROUTER_TRACE=summary DS4_SUMMARY_SMOKE_PROMPT="Say hello." $0
   DS4_MODEL=/models/ds4.gguf DS4_SUMMARY_SESSION_NAME=low-gpu-test $0
 EOF
 }
@@ -98,6 +106,8 @@ write_env_log() {
         echo "final_tests=$FINAL_TESTS"
         echo "final_mcp=$FINAL_MCP"
         echo "final_cmd=$FINAL_CMD"
+        echo "smoke_prompt=$SMOKE_PROMPT"
+        echo "smoke_timeout=$SMOKE_TIMEOUT"
     } > "$ENV_LOG"
 }
 
@@ -232,8 +242,76 @@ summary_loop() {
     done
 }
 
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    printf "%s" "$s"
+}
+
+smoke_request_loop() {
+    if [ -z "$SMOKE_PROMPT" ]; then
+        return 0
+    fi
+
+    local host="${DS4_HOST:-127.0.0.1}"
+    local port="${DS4_PORT:-11112}"
+    local deadline
+    local prompt_json
+
+    if [ "$host" = "0.0.0.0" ]; then
+        host="127.0.0.1"
+    fi
+
+    deadline=$(( $(date +%s) + SMOKE_TIMEOUT ))
+    prompt_json="$(json_escape "$SMOKE_PROMPT")"
+
+    {
+        echo "Smoke prompt started at $(date -Iseconds)"
+        echo "Endpoint: http://$host:$port/v1/chat/completions"
+        echo "Prompt: $SMOKE_PROMPT"
+        echo
+    } > "$SMOKE_LOG"
+
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if command -v curl >/dev/null 2>&1 &&
+           curl -fsS -m 2 "http://$host:$port/v1/models" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+    done
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "curl unavailable; cannot send smoke prompt" >> "$SMOKE_LOG"
+        return 0
+    fi
+
+    if ! curl -fsS -m 2 "http://$host:$port/v1/models" >/dev/null 2>&1; then
+        echo "server did not become ready before timeout" >> "$SMOKE_LOG"
+        return 0
+    fi
+
+    {
+        echo "Server ready at $(date -Iseconds)"
+        echo
+        curl -sS -m 300 "http://$host:$port/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer dsv4-local" \
+            --data "{\"model\":\"deepseek-chat\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt_json\"}],\"think\":false,\"temperature\":0,\"max_tokens\":16}"
+        echo
+        echo "finished_at=$(date -Iseconds)"
+    } >> "$SMOKE_LOG" 2>&1 || true
+}
+
 cleanup() {
     local status="${1:-stopping}"
+
+    if [ -n "${SMOKE_PID:-}" ]; then
+        kill "$SMOKE_PID" 2>/dev/null || true
+        wait "$SMOKE_PID" 2>/dev/null || true
+    fi
 
     if [ -n "${SUMMARY_PID:-}" ]; then
         kill "$SUMMARY_PID" 2>/dev/null || true
@@ -325,6 +403,9 @@ START_PID=$!
 
 summary_loop &
 SUMMARY_PID=$!
+
+smoke_request_loop &
+SMOKE_PID=$!
 
 set +e
 wait "$START_PID"

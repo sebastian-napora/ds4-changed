@@ -690,6 +690,11 @@ To run only the tests with separated logs:
 ./run-tests-logged.sh --test --server --test --logprob-vectors
 ```
 
+If another `ds4` process is already running, model-dependent tests are skipped
+by default and logged with `exit_status=77`; non-model tests still run. Stop the
+model first, or run the final tests through `start-low-gpu-summary.sh`, when you
+need the model-dependent tests to execute.
+
 For a complete repository-work session that covers assessment, improvement
 notes, validation, verification, setup/create/edit/read/check/tool command logs,
 git history, optional MCP inspection, optional per-test logs, and optional model
@@ -698,12 +703,40 @@ startup with router expert tracing:
 ```sh
 ./repo-agent-work.sh --with-tests --with-mcp
 ./repo-agent-work.sh --start-model --with-tests --expert-summary
+./repo-agent-work.sh --start-model --expert-detail --smoke-prompt "Say hello in one sentence."
 ./repo-agent-work.sh --setup-cmd "./setup-mtp.sh --setup-only" --verify-cmd "git status --short"
 ```
 
 When `--start-model` is used, expert usage is saved through `DS4_ROUTER_TRACE`.
 Summary expert routing goes to `summary-logs/<session>/model/run.log`; detailed
-sampled expert rows can be enabled with `--expert-detail`.
+sampled expert rows can be enabled with `--expert-detail`. The workflow sends a
+small smoke prompt after the server becomes ready, because expert routing is only
+logged when the model processes a request.
+
+To make the model actively inspect repository/test cases and save the real
+model output, use `repo-model-review.sh`:
+
+```sh
+./repo-model-review.sh --start-model --with-tests --expert-summary
+```
+
+That command runs `run-tests-logged.sh` first, starts the low-GPU server with
+router tracing, waits for `/v1/models`, then sends repository assessment,
+workflow validation, improvement planning, and each test log as separate model
+requests. The prompts and raw responses are saved under
+`summary-logs/<session>/cases/` and
+`summary-logs/<session>/model-responses/`. This is the workflow that creates
+real GPU inference work; the other session scripts mainly collect evidence and
+runtime logs.
+
+If the model is already running, skip startup and review the current repository
+or an existing test session:
+
+```sh
+./repo-model-review.sh --with-tests
+./repo-model-review.sh --test-log-dir summary-logs/tests-20260513-131419
+./repo-model-review.sh --prompt "Review the logging workflow and suggest missing validation."
+```
 
 There is also a CPU reference/debug path:
 
