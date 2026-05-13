@@ -1,0 +1,9 @@
+$ ./ds4_test --tool-call-quality
+started_at=2026-05-13T13:24:52+00:00
+
+tool-call-quality:
+ds4-test: tool-call quality fast path
+ds4: another ds4 process is already running (pid 36955); refusing to start
+
+finished_at=2026-05-13T13:24:52+00:00
+exit_status=2

@@ -1,0 +1,7 @@
+$ ./run-tests-logged.sh --log-dir /home/sna/ai-projects/ds4/summary-logs/repo-session-20260513-132515/tests
+started_at=2026-05-13T13:25:16+00:00
+
+Logged test session written to: /home/sna/ai-projects/ds4/summary-logs/repo-session-20260513-132515/tests
+
+finished_at=2026-05-13T13:25:16+00:00
+exit_status=1

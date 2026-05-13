@@ -1,0 +1,8 @@
+# validation
+$ ./run-tests-logged.sh --test --server
+started_at=2026-05-13T13:32:00+00:00
+
+Logged test session written to: /home/sna/ai-projects/ds4/summary-logs/tests-20260513-133200
+
+finished_at=2026-05-13T13:32:00+00:00
+exit_status=0

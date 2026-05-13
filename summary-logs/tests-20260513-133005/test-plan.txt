@@ -1,0 +1,5 @@
+--long-context
+--tool-call-quality
+--logprob-vectors
+--metal-kernels
+--server

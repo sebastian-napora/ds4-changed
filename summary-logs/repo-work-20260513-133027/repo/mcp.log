@@ -1,0 +1,3 @@
+# MCP Check
+
+No local codex CLI found. MCP tools available inside the assistant runtime are not directly callable from this shell script.

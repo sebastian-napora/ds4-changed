@@ -1,0 +1,10 @@
+$ ./ds4_test --metal-kernels
+started_at=2026-05-13T13:22:30+00:00
+
+metal-kernels:
+ds4: CUDA host registration skipped: operation not supported
+metal-kernels: OK
+ds4 tests: ok
+
+finished_at=2026-05-13T13:22:30+00:00
+exit_status=0

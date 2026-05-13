@@ -1,0 +1,73 @@
+# DS4 Low GPU Summary
+
+- Session: low-gpu-20260513-132355
+- State: running
+- Updated: 2026-05-13T13:32:56+00:00
+- Log directory: /home/sna/ai-projects/ds4/summary-logs/low-gpu-20260513-132355
+- Run log: /home/sna/ai-projects/ds4/summary-logs/low-gpu-20260513-132355/run.log
+
+## Processes
+
+wrapper: running pid=36887
+ds4-server: stopped pid=42063
+litellm: stopped pid=42160
+memory-monitor: stopped pid=42162
+gpu-monitor: stopped pid=42161
+
+## Endpoints
+
+ds4 /v1/models: unavailable
+litellm /v1/models: unavailable
+
+## GPU
+
+NVIDIA GB10, 0, 10.94, [N/A], [N/A], [N/A], 44
+
+## Memory
+
+               total        used        free      shared  buff/cache   available
+Mem:           119Gi       4.5Gi       107Gi        75Mi       8.7Gi       115Gi
+Swap:           15Gi       704Mi        15Gi
+
+## Recent Run Log
+
+  Model:       ds4flash.gguf
+  Context:     100000 tokens
+  KV Cache:    /tmp/ds4-kv
+  Power Limit: 15%
+  Max RAM:     124GB / 95%
+==========================================
+
+Services:
+  ds4 backend:  http://0.0.0.0:11112/v1/chat/completions
+  LiteLLM:     http://0.0.0.0:11111/v1/chat/completions
+
+API Key: dsv4-local
+
+🚀 Starting ds4-server (port 11112)...
+   Command: ./ds4-server --host 0.0.0.0 --port 11112 --ctx 100000 --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192 -m ds4flash.gguf
+   PID: 36955
+Waiting 10s for ds4 to initialize...
+ds4: CUDA backend initialized on NVIDIA GB10 (sm_121)
+ds4: CUDA host registration skipped: operation not supported
+ds4: CUDA loading model tensors into device cache
+ds4: CUDA loading model tensors 16.02 GiB cached
+ds4: CUDA loading model tensors 32.06 GiB cached
+ds4: CUDA loading model tensors 48.02 GiB cached
+ds4: CUDA loading model tensors 64.06 GiB cached
+ds4: CUDA loading model tensors 80.04 GiB cached
+ds4: CUDA startup model cache prepared 80.76 GiB of tensor spans in 9.622s
+ds4: cuda backend initialized for graph diagnostics
+0513 13:24:08 ds4-server: context buffers 1896.58 MiB (ctx=100000, backend=cuda, prefill_chunk=2048, raw_kv_rows=2304, compressed_kv_rows=25002)
+0513 13:24:08 ds4-server: KV disk cache /tmp/ds4-kv (budget=8192 MiB, cross-quant=accept, min=512, cold_max=30000, continued=10000, trim=32, align=2048)
+0513 13:24:08 ds4-server: listening on http://0.0.0.0:11112
+🚀 Starting LiteLLM proxy (port 11111)...
+   PID: 37017
+
+📊 Starting GPU and memory monitoring...
+
+📊 GPU monitoring (Ctrl+C to stop):
+
+📊 Memory monitoring (limit: 124GB / 95%)...
+   GPU: 12   | Power: 11.50W | Temp: 46°C     GPU: 0    | Power: 11.14W | Temp: 45°C     RAM: 94.017GB / 119.692GB (79%)       GPU: 0    | Power: 11.09W | Temp: 45°C     GPU: 0    | Power: 11.10W | Temp: 45°C     GPU: 0    | Power: 11.12W | Temp: 45°C     GPU: 0    | Power: 11.04W | Temp: 45°C     GPU: 0    | Power: 11.03W | Temp: 45°C     GPU: 0    | Power: 11.11W | Temp: 45°C     GPU: 0    | Power: 11.13W | Temp: 45°C     GPU: 0    | Power: 11.09W | Temp: 45°C     RAM: 93.9384GB / 119.692GB (78%)       GPU: 0    | Power: 11.10W | Temp: 45°C     GPU: 0    | Power: 11.04W | Temp: 45°C     GPU: 0    | Power: 11.06W | Temp: 45°C     GPU: 0    | Power: 11.07W | Temp: 45°C     GPU: 0    | Power: 11.07W | Temp: 45°C     GPU: 0    | Power: 11.05W | Temp: 45°C     GPU: 0    | Power: 11.09W | Temp: 45°C     GPU: 0    | Power: 11.05W | Temp: 45°C     RAM: 93.8694GB / 119.692GB (78%)       GPU: 0    | Power: 11.06W | Temp: 45°C     GPU: 0    | Power: 11.02W | Temp: 45°C     GPU: 0    | Power: 11.01W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.06W | Temp: 44°C     GPU: 0    | Power: 11.06W | Temp: 44°C     GPU: 0    | Power: 11.04W | Temp: 44°C     GPU: 0    | Power: 11.05W | Temp: 44°C     RAM: 93.8652GB / 119.692GB (78%)       GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.04W | Temp: 44°C     GPU: 0    | Power: 11.06W | Temp: 44°C     GPU: 0    | Power: 11.06W | Temp: 44°C     GPU: 0    | Power: 11.09W | Temp: 44°C     GPU: 0    | Power: 11.05W | Temp: 44°C     GPU: 0    | Power: 10.99W | Temp: 44°C     GPU: 0    | Power: 11.02W | Temp: 44°C     RAM: 93.8356GB / 119.692GB (78%)       GPU: 0    | Power: 11.04W | Temp: 44°C     GPU: 0    | Power: 11.01W | Temp: 44°C     GPU: 0    | Power: 11.05W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.00W | Temp: 44°C     GPU: 0    | Power: 11.01W | Temp: 44°C     GPU: 0    | Power: 11.02W | Temp: 44°C     RAM: 93.8646GB / 119.692GB (78%)       GPU: 0    | Power: 11.05W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.00W | Temp: 44°C     GPU: 0    | Power: 11.02W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 10.98W | Temp: 44°C     GPU: 0    | Power: 10.97W | Temp: 44°C     RAM: 93.8796GB / 119.692GB (78%)       GPU: 0    | Power: 10.94W | Temp: 44°C     GPU: 0    | Power: 10.96W | Temp: 44°C     GPU: 0    | Power: 10.97W | Temp: 44°C     GPU: 0    | Power: 10.96W | Temp: 44°C     GPU: 0    | Power: 10.99W | Temp: 44°C     GPU: 0    | Power: 10.95W | Temp: 44°C     GPU: 0    | Power: 10.99W | Temp: 44°C     GPU: 0    | Power: 10.96W | Temp: 44°C     RAM: 93.8694GB / 119.692GB (78%)       GPU: 0    | Power: 10.98W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 10.99W | Temp: 44°C     GPU: 0    | Power: 11.00W | Temp: 44°C     GPU: 0    | Power: 10.98W | Temp: 44°C     GPU: 0    | Power: 11.06W | Temp: 44°C     GPU: 0    | Power: 10.98W | Temp: 44°C     RAM: 93.8968GB / 119.692GB (78%)       GPU: 0    | Power: 10.98W | Temp: 44°C     GPU: 0    | Power: 10.97W | Temp: 44°C     GPU: 0    | Power: 10.95W | Temp: 44°C     GPU: 0    | Power: 10.95W | Temp: 44°C     GPU: 0    | Power: 11.00W | Temp: 44°C     GPU: 0    | Power: 11.41W | Temp: 44°C     GPU: 0    | Power: 10.99W | Temp: 44°C     GPU: 0    | Power: 11.02W | Temp: 44°C     RAM: 93.9761GB / 119.692GB (79%)       GPU: 0    | Power: 10.99W | Temp: 44°C     GPU: 0    | Power: 11.00W | Temp: 44°C     GPU: 0    | Power: 11.01W | Temp: 44°C     GPU: 0    | Power: 10.97W | Temp: 44°C  0513 13:30:36 ds4-server: shutdown requested, draining requests
+   GPU: 0    | Power: 11.01W | Temp: 44°C     GPU: 0    | Power: 10.99W | Temp: 44°C     GPU: 0    | Power: 11.06W | Temp: 44°C     GPU: 11   | Power: 11.47W | Temp: 44°C     RAM: 67.3148GB / 119.692GB (56%)       GPU: 14   | Power: 11.52W | Temp: 45°C     GPU: 0    | Power: 11.04W | Temp: 45°C     GPU: 0    | Power: 11.05W | Temp: 44°C     GPU: 0    | Power: 11.06W | Temp: 44°C     GPU: 0    | Power: 11.04W | Temp: 44°C     GPU: 0    | Power: 11.08W | Temp: 44°C     GPU: 0    | Power: 11.03W | Temp: 44°C     GPU: 0    | Power: 11.01W | Temp: 44°C     RAM: 93.9027GB / 119.692GB (78%)       GPU: 0    | Power: 11.04W | Temp: 44°C     GPU: 0    | Power: 10.97W | Temp: 44°C     GPU: 0    | Power: 11.01W | Temp: 44°C     GPU: 0    | Power: 11.02W | Temp: 44°C     GPU: 0    | Power: 11.02W | Temp: 44°C     GPU: 0    | Power: 10.97W | Temp: 44°C     GPU: 0    | Power: 11.01W | Temp: 44°C     GPU: 0    | Power: 10.99W | Temp: 44°C     RAM: 4.50107GB / 119.692GB (4%)       GPU: 0    | Power: 11.00W | Temp: 44°C     GPU: 0    | Power: 10.93W | Temp: 44°C     GPU: 0    | Power: 10.92W | Temp: 44°C     GPU: 0    | Power: 10.87W | Temp: 44°C     GPU: 0    | Power: 10.93W | Temp: 44°C     GPU: 0    | Power: 10.92W | Temp: 44°C     GPU: 0    | Power: 10.94W | Temp: 44°C  

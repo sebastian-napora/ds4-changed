@@ -1,0 +1,7 @@
+$ bash -lc rg --files --glob '!venv/**' --glob '!gguf/**' --glob '!summary-logs/**' | sort
+started_at=2026-05-13T13:13:58+00:00
+
+bash: line 1: rg: command not found
+
+finished_at=2026-05-13T13:13:58+00:00
+exit_status=0

@@ -1,0 +1,38 @@
+# Shell Syntax Check
+
+===== bash -n download_model.sh =====
+exit_status=0
+
+===== bash -n kill-server.sh =====
+exit_status=0
+
+===== bash -n repo-session.sh =====
+exit_status=0
+
+===== bash -n setup-mtp.sh =====
+exit_status=0
+
+===== bash -n setup-venv.sh =====
+exit_status=0
+
+===== bash -n start-lazy-experts-12.sh =====
+exit_status=0
+
+===== bash -n start-lazy-experts-128gb.sh =====
+exit_status=0
+
+===== bash -n start-lazy-experts-40.sh =====
+exit_status=0
+
+===== bash -n start-lazy-experts.sh =====
+exit_status=0
+
+===== bash -n start-low-gpu-summary.sh =====
+exit_status=0
+
+===== bash -n start-low-gpu.sh =====
+exit_status=0
+
+===== bash -n start-server.sh =====
+exit_status=0
+

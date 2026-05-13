@@ -1,0 +1,8 @@
+$ ./ds4_test --logprob-vectors
+started_at=2026-05-13T13:30:05+00:00
+
+logprob-vectors:
+ds4: another ds4 process is already running (pid 36955); refusing to start
+
+finished_at=2026-05-13T13:30:05+00:00
+exit_status=2

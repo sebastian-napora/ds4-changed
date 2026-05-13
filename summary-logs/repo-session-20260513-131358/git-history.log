@@ -1,0 +1,55 @@
+$ git log --oneline --decorate --graph -n 40
+started_at=2026-05-13T13:13:58+00:00
+
+* e2cbfef (HEAD -> feat/lazy-loading-experts, origin/feat/lazy-loading-experts) feat: add repo-session and low-gpu-summary scripts, update docs
+* 9995d13 fix: increased memory usage
+* f665d92 fix: increase amount of experts
+* 419ff71 feat: added lazy loading experts
+* 1aa574f (origin/main, origin/HEAD, main) fix: another fix on expeerts
+* 031b214 fix: lazy experts setup
+* 75d4850 fix: lazy experts
+* 86a4076 feat: lazy experts mode - POC
+* 671f53f feat: added mtp script
+* 7c793c5 feat: added own setup
+* a97e7a3 Guard CUDA q8 fp16 cache memory use
+*   3630e64 Merge pull request #88 from timtan/bench-m2-ultra
+|\  
+| * d9e2317 Add M2 Ultra (192 GB) benchmark.
+|/  
+* e801b2b Renamed bench to speed-bench, since LLM benchmarking means something different.
+* ef75c30 Benchmark CSV to SVG rendering Python script added.
+* 9e41f36 Use a single directory for benchmark CSV files.
+* 5193a08 Delete no longer useful python test.
+*   b7efbb6 Merge pull request #87 from VadimDu/main
+|\  
+| * da8f18b Add files via upload
+| * bd987ee Create README.md
+* | 0c41d58 Add CUDA long-context regression test
+|/  
+* 320b779 Import CUDA long-context fixes
+* ed5d30d q4 imatrix file in the download script.
+* 920f987 Document that it runs well with 96GB of system memory.
+*   99a5c13 Merge commit '5161bc9493a3bde31d0fc8a8dce002662d6e2d16'
+|\  
+| * 5161bc9 q2-imatrix weights added to download script.
+* | 579edb8 Ignore .DS_Store files.
+* | 66afd65 Add CUDA architecture build knob
+* | 412bae1 Report server prefill progress by suffix
+* |   cdf8040 Merge pull request #77 from ivanfioravanti/codex/server-thinking-checkpoint-gate
+|\ \  
+| |/  
+|/|   
+| * b1ed832 Fix thinking checkpoint rebuild on length stop
+|/  
+* ae302c2 Project renamed to DwarfStar 4.
+* 0c1c023 Add incremental throughput benchmark
+* 9deabad Add verbosity steering example
+* 0ac5df3 Different backends refactoring
+* f5f414d CPU support improved
+* 48beef8 CUDA support
+* 3f7e5c9 Add directional steering pipeline
+* e88a51f README: project status.
+* 0e79cee Return recoverable output for malformed tool calls
+
+finished_at=2026-05-13T13:13:58+00:00
+exit_status=0

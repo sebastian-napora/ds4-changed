@@ -1,0 +1,73 @@
+# DS4 Low GPU Summary
+
+- Session: low-gpu-20260513-132200
+- State: interrupted
+- Updated: 2026-05-13T13:23:47+00:00
+- Log directory: /home/sna/ai-projects/ds4/summary-logs/low-gpu-20260513-132200
+- Run log: /home/sna/ai-projects/ds4/summary-logs/low-gpu-20260513-132200/run.log
+
+## Processes
+
+wrapper: running pid=35883
+ds4-server: running pid=35953
+litellm: stopped pid=36009
+memory-monitor: running pid=36011
+gpu-monitor: running pid=36010
+
+## Endpoints
+
+ds4 /v1/models: unavailable
+litellm /v1/models: unavailable
+
+## GPU
+
+NVIDIA GB10, 0, 11.07, [N/A], [N/A], [N/A], 45
+
+## Memory
+
+               total        used        free      shared  buff/cache   available
+Mem:           119Gi        91Gi        20Gi       374Mi       8.5Gi        27Gi
+Swap:           15Gi       705Mi        15Gi
+
+## Recent Run Log
+
+==========================================
+  Model:       ds4flash.gguf
+  Context:     100000 tokens
+  KV Cache:    /tmp/ds4-kv
+  Power Limit: 15%
+  Max RAM:     124GB / 95%
+==========================================
+
+Services:
+  ds4 backend:  http://0.0.0.0:11112/v1/chat/completions
+  LiteLLM:     http://0.0.0.0:11111/v1/chat/completions
+
+API Key: dsv4-local
+
+🚀 Starting ds4-server (port 11112)...
+   Command: ./ds4-server --host 0.0.0.0 --port 11112 --ctx 100000 --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 8192 -m ds4flash.gguf
+   PID: 35953
+Waiting 10s for ds4 to initialize...
+ds4: CUDA backend initialized on NVIDIA GB10 (sm_121)
+ds4: CUDA host registration skipped: operation not supported
+ds4: CUDA loading model tensors into device cache
+ds4: CUDA loading model tensors 16.02 GiB cached
+ds4: CUDA loading model tensors 32.06 GiB cached
+ds4: CUDA loading model tensors 48.02 GiB cached
+ds4: CUDA loading model tensors 64.06 GiB cached
+🚀 Starting LiteLLM proxy (port 11111)...
+   PID: 36009
+
+📊 Starting GPU and memory monitoring...
+
+📊 GPU monitoring (Ctrl+C to stop):
+
+📊 Memory monitoring (limit: 124GB / 95%)...
+   GPU: 12   | Power: 11.60W | Temp: 46°C  ds4: CUDA loading model tensors 80.04 GiB cached
+ds4: CUDA startup model cache prepared 80.76 GiB of tensor spans in 10.069s
+ds4: cuda backend initialized for graph diagnostics
+0513 13:22:13 ds4-server: context buffers 1896.58 MiB (ctx=100000, backend=cuda, prefill_chunk=2048, raw_kv_rows=2304, compressed_kv_rows=25002)
+0513 13:22:13 ds4-server: KV disk cache /tmp/ds4-kv (budget=8192 MiB, cross-quant=accept, min=512, cold_max=30000, continued=10000, trim=32, align=2048)
+0513 13:22:13 ds4-server: listening on http://0.0.0.0:11112
+   GPU: 0    | Power: 11.14W | Temp: 46°C     RAM: 93.916GB / 119.692GB (78%)       GPU: 0    | Power: 11.13W | Temp: 46°C     GPU: 0    | Power: 11.18W | Temp: 45°C     GPU: 0    | Power: 11.13W | Temp: 45°C     GPU: 0    | Power: 11.16W | Temp: 45°C     GPU: 0    | Power: 11.14W | Temp: 45°C     GPU: 0    | Power: 11.16W | Temp: 45°C     GPU: 0    | Power: 11.13W | Temp: 45°C     GPU: 0    | Power: 11.11W | Temp: 45°C     RAM: 93.8763GB / 119.692GB (78%)       GPU: 0    | Power: 11.11W | Temp: 45°C     GPU: 0    | Power: 11.13W | Temp: 45°C     GPU: 0    | Power: 11.06W | Temp: 45°C     GPU: 0    | Power: 11.05W | Temp: 45°C     GPU: 0    | Power: 11.03W | Temp: 45°C     GPU: 0    | Power: 11.03W | Temp: 45°C     GPU: 0    | Power: 11.05W | Temp: 45°C     GPU: 0    | Power: 11.02W | Temp: 45°C     RAM: 93.8901GB / 119.692GB (78%)       GPU: 0    | Power: 11.02W | Temp: 45°C  

@@ -1,0 +1,7 @@
+$ ./repo-session.sh --session-name repo
+started_at=2026-05-13T13:32:00+00:00
+
+Repository session written to: /home/sna/ai-projects/ds4/summary-logs/repo-work-20260513-133200/repo
+
+finished_at=2026-05-13T13:32:00+00:00
+exit_status=0
