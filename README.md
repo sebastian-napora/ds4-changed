@@ -647,6 +647,29 @@ selected expert IDs, router weights, logits, probabilities, and whether routing
 used normal top-k scoring or the token-id expert table. The trace synchronizes
 GPU work to read tensors back, so enable it only for diagnostics.
 
+Low-GPU runtime summary sessions can be started with:
+
+```sh
+./start-low-gpu-summary.sh
+```
+
+This wraps `start-low-gpu.sh` and writes a timestamped session under
+`summary-logs/`, including `run.log`, a continuously refreshed `summary.md`,
+and an append-only `timeline.log`. Adjust the refresh interval with
+`DS4_SUMMARY_INTERVAL=10 ./start-low-gpu-summary.sh`.
+
+Repository assessment sessions can be created with:
+
+```sh
+./repo-session.sh
+./repo-session.sh --with-build --with-tests
+./repo-session.sh --cmd "git diff --stat"
+```
+
+Each session writes separate timestamped logs under `summary-logs/` for git
+state/history, content scans, shell-script syntax checks, optional build/test
+runs, optional MCP CLI checks, and any explicit commands passed with `--cmd`.
+
 There is also a CPU reference/debug path:
 
 ```sh
